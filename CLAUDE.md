@@ -1,76 +1,76 @@
-# Mopai (墨排) — Markdown to WeChat Official Account Formatter
+# Mopai (墨排) — Markdown 转公众号排版桌面应用
 
-## Tech Stack
-- **Runtime**: Browser-only SPA, zero build step
-- **Language**: Vanilla JavaScript (ES5/IIFE modules, no transpilation)
-- **Markdown**: markdown-it 14.x + markdown-it-footnote
-- **Code Highlighting**: highlight.js 11.x
-- **CSS Inlining**: juice 12.x (listed as dep, not used at runtime)
-- **Dev Server**: `python -m http.server 3456`
+## 架构
+**pywebview 桌面应用 + 嵌入式 Python 运行时**。零外部依赖：整个 Python 解释器和全部 pip 依赖都在项目 `runtime/` 目录内，删文件夹即完全卸载。
 
-## Architecture
-Single HTML page with 8 IIFE modules loaded in dependency order via `<script>` tags. No bundler, no framework, no npm scripts.
-
-### Module Loading Order (index.html lines 130-140)
 ```
-hljs → markdownit → markdownitFootnote → state → themes → table-strategy → engine → file-io → copy → export → ui
+mopai.cmd            ← 双击启动（runtime\pythonw.exe app.py，无控制台窗口）
+setup-runtime.cmd    ← 新机器上一键重建 runtime/（下载嵌入式 Python + pip 依赖）
+app.py               ← 入口：pywebview 窗口 + Python API 桥
+runtime/             ← 嵌入式 Python 3.12.9 + pywebview（git 忽略，setup 脚本重建）
+index.html           ← 前端单页（全部 CSS 内联 <style>，JS 按序 <script> 加载）
+src/                 ← 11 个 IIFE 模块（ES5 风格，无构建步骤）
+test/cdp_eval.py     ← CDP 调试工具（见下文"调试"）
 ```
 
-`ui.js` is the orchestrator — all other modules are data or services with no knowledge of the DOM.
+## 前后端桥（window.pywebview.api）
+前端 JS 通过 `window.pywebview.api.*`（Promise）调用 app.py 的 Api 类：
 
-### Data Flow
-```
-User input (textarea/drag/paste)
-  → ui.js captures event
-  → state.js persists to localStorage
-  → engine.js render pipeline:
-      1. markdown-it → HTML
-      2. applyTheme() walks DOM, merges inline styles per tag
-      3. MopaiTable.process() adapts tables for mobile
-      4. Footnote section appended for external links
-  → Preview panel updated
-  → Export/Copy: same pipeline → Blob download or clipboard
-```
+| 方法 | 作用 |
+|------|------|
+| `open_file(path?)` | 打开 .md 文件；path 为空弹原生对话框 |
+| `open_folder(path?)` | 打开文章文件夹：读第一个 MD + 扫描全部图片为 `{相对路径: dataURI}` |
+| `pick_images()` | 原生多选图片对话框 |
+| `upload_image(dataUri, token)` | 上传到 s.ee 图床（原 SM.MS 兼容 API），返回 `{ok, url}` |
+| `copy_html(html)` | CF_HTML + CF_UNICODETEXT 双格式写剪贴板 |
 
-### Critical Design Constraint
-**Everything must be inline styles.** WeChat Official Account editor strips `<style>`, `<link>`, and `class` attributes. All visual styling is applied via `element.setAttribute('style', ...)`.
+**Win32 ctypes 注意**：所有句柄/指针函数必须声明 `restype/argtypes`（见 `_setup_win32()`），否则 64 位下指针截断导致 access violation。
 
-## Project Structure
+## 模块加载顺序（index.html）
 ```
-index.html          — Single-page app (all CSS in <style>, all JS via <script>)
-src/
-  ui.js             — Main orchestrator: DOM events, preview updates, toolbar actions
-  engine.js         — Markdown → themed HTML pipeline (+ footnote generation)
-  themes.js         — 6 article themes + 5 code highlight theme definitions
-  table-strategy.js — Adaptive table rendering (fixed/scroll/key-value/warn)
-  state.js          — Application state + localStorage persistence + history (max 20)
-  file-io.js        — File drag & drop, paste handlers
-  copy.js           — Clipboard API with legacy fallback
-  export.js         — HTML/Markdown file download via Blob
-lib/                — Vendored third-party libraries (minified)
-themes/             — highlight.js CSS theme files (5 themes)
-dev-server.cmd      — Windows batch file: starts Python HTTP server on :3456
+hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
+→ table-strategy → assets → engine → file-io → image-upload → copy → export → ui
 ```
 
-## Key Conventions
-- **IIFE modules** (`var ModName = (function() { ... })();`) — consistent pattern across all src files
-- **Dependency comments** at top of each file: `Depends on: ...` / `Called by: ...`
-- **No ES modules** — everything is global-namespaced (project is `type: "commonjs"` in package.json but never runs in Node)
-- **ES5 syntax** — `var` not `let/const`, `function` not arrow functions, for broader browser compat
-- **State persistence**: current doc auto-saved to `localStorage` on every change; explicit save (Ctrl+S or history button) adds to history list
+## 核心数据流
+```
+打开文件夹 → app.py 扫描 → {MD内容, 图片映射} → MopaiAssets.setMap()
+编辑器输入 → engine.render() 管线：
+  1. markdown-it → HTML
+  2. applyTheme() 内联样式 + 标题装饰（h2Content span）+ 图注（img title → figcaption）
+  3. MopaiAssets.resolveImages() 相对路径 → dataURI（仅预览）
+  4. inlineHighlightStyles() 代码高亮内联化
+  5. MopaiTable.process() 表格自适应（卡片/DL/滑动）
+复制到公众号 → copy.js：
+  dataURI 图片逐张 upload_image() → 替换为图床 URL → copy_html() 写剪贴板
+```
 
-## Running
+## 关键设计约束
+1. **一切样式必须内联** —— 公众号编辑器剥除 `<style>`/`<link>`/`class`
+2. **标题招牌设计靠 `h2Content`/`h3Content`** —— engine `_walk` 会把标题文字包一层 `<span>` 套用该样式（马克笔下划线 `linear-gradient(#fff 60%, 主色 40%)`、标签页等技法）
+3. **图片永不立即上传** —— 粘贴/拖入/文件夹图片统一注册到 MopaiAssets，「复制」时批量上传并替换 URL（同图去重，见 copy.js `_urlCache`）
+4. **背景色只在 table/td 上可靠** —— 微信模式用 `wrapForWechat()` 表格包裹保留底色
+
+## 主题体系（11 套）
+- **6 套招牌主题**（themes.js）：山吹（琥珀马克笔）、橙心（珊瑚标签页）、极客黑（黑标签页+珊瑚）、蔷薇紫、萌绿、兰青 —— 设计参考 mdnice 经典主题
+- **5 套墨排主题**（wechat-theme.js）：墨排·Pro/极简/暖读/杂志/禅意（wechat 模式：表格包裹保背景 + 宽表全转卡片）
+- **5 套代码配色**：VS Code Dark+/Light+、GitHub、Monokai、Solarized Light（hljs token → 内联色值映射）
+
+## 图床
+**s.ee**（SM.MS 官方迁移目标，API 兼容）：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`。用户在 ⚙ 设置面板填 Key（存 localStorage），面板带 1px 测试图连通性验证。
+
+## 调试（CDP）
 ```bash
-# Start dev server (Windows)
-dev-server.cmd
+# 带调试端口启动
+set WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222
+runtime\python.exe app.py
 
-# Or directly
-python -m http.server 3456
+# 在应用窗口里执行任意 JS（另开终端）
+runtime\python.exe test\cdp_eval.py "document.title"
 ```
-Then open http://localhost:3456
 
-## No Tests
-The project has no test suite. `package.json` scripts.test is the default placeholder.
+## 验证过的端到端路径
+打开文件夹 → 相对路径图片映射 → 图注渲染 → 无 Key 时复制给引导提示 → CF_HTML 写剪贴板（Python 读回验证）→ 假 Key 上传得 401（链路通，真 Key 即可成功）。
 
-## No Git
-The project directory has no git repository initialized.
+## 测试
+无测试套件。`test/sample-article/`（git 忽略）是端到端验证用的样例文章。
