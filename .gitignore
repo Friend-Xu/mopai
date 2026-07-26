@@ -1,0 +1,25 @@
+# 嵌入式 Python 运行时（可用 setup-runtime.cmd 重建）
+runtime/
+
+# 参考项目（不属于本产品）
+obsidian-md2wechat-main/
+markdown-online-editor-master/
+md2wechat-skill-main/
+md-to-weixin-main/
+research/
+
+# 开发工具链
+node_modules/
+.playwright-mcp/
+package.json
+package-lock.json
+
+# 调试与测试产物
+app-debug.log
+test/sample-article/
+__pycache__/
+*.pyc
+
+# 个人工具（Claude Code 会话与本机启动器）
+.claude/
+__启动脚本.bat
