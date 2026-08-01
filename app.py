@@ -2,33 +2,183 @@
 """
 app.py — 墨排 Mopai 桌面入口
 pywebview 窗口 + 暴露给前端的 Python API：
-  - open_file()      原生对话框打开 .md 文件
+  - open_file()      原生对话框打开 .md 文件（含所在目录图片扫描）
   - open_folder()    原生对话框打开文章文件夹（MD + 相对路径图片映射）
+  - read_file()      轻量读取 md（文件栏切换用）
   - pick_images()    多选图片，返回 dataURI 列表
-  - upload_image()   SM.MS 图床上传（Python 直连，无 CORS 限制）
-  - copy_html()      以 CF_HTML 格式写入剪贴板（公众号编辑器认这个格式）
+  - upload_image()   s.ee 图床上传（备选模式）
+  - prepare_copy()   本地 HTTP 模式：dataURI → localhost URL（默认模式）
+  - save_file()      写回 md 文件到磁盘
+  - copy_html()      以 CF_HTML 格式写入剪贴板
 """
 import base64
 import ctypes
+import http.server
 import json
 import mimetypes
 import os
+import re
+import shutil
+import socket
+import tempfile
+import threading
+import time
 import urllib.request
 
 import webview
 
 IMAGE_EXTS = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp')
-MAX_IMAGE_BYTES = 5 * 1024 * 1024  # SM.MS 免费版单张上限
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # s.ee 免费版单张上限
 
 
 class Api:
     def __init__(self):
         self._window = None
+        self._img_server = None
+        self._img_port = None
+        self._tmp_dir = None
+        self._batch_counter = 0
+        self._start_image_server()
+
+    # ---------- 本地 HTTP 图片服务 ----------
+
+    def _start_image_server(self):
+        """启动常驻 HTTP 服务（127.0.0.1 + 随机端口），serve 临时目录"""
+        self._tmp_dir = tempfile.mkdtemp(prefix='mopai_img_')
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            self._img_port = s.getsockname()[1]
+
+        tmp = self._tmp_dir
+
+        class Handler(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=tmp, **kwargs)
+            def end_headers(self):
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+                self.send_header('Cache-Control', 'no-cache')
+                super().end_headers()
+            def do_OPTIONS(self):
+                self.send_response(200)
+                self.end_headers()
+            def log_message(self, *args):
+                pass
+
+        self._img_server = http.server.HTTPServer(('127.0.0.1', self._img_port), Handler)
+        t = threading.Thread(target=self._img_server.serve_forever, daemon=True)
+        t.start()
+
+    def _clean_old_batches(self, max_age=300):
+        """清理超过 max_age 秒的批次目录"""
+        if not os.path.isdir(self._tmp_dir):
+            return
+        now = time.time()
+        for name in os.listdir(self._tmp_dir):
+            path = os.path.join(self._tmp_dir, name)
+            if os.path.isdir(path) and (now - os.path.getmtime(path)) > max_age:
+                try:
+                    shutil.rmtree(path)
+                except Exception:
+                    pass
+
+    # ---------- 复制准备（本地 HTTP 模式） ----------
+
+    _DATA_URI_RE = re.compile(r'data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+')
+    _MIME_EXT = {
+        'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif',
+        'image/webp': '.webp', 'image/svg+xml': '.svg', 'image/bmp': '.bmp'
+    }
+
+    def prepare_copy(self, html):
+        """把 HTML 中的 dataURI 图片解码写到临时文件，替换为 localhost URL。
+        返回 {html, imageCount}"""
+        self._batch_counter += 1
+        batch = 'b%d' % self._batch_counter
+        batch_dir = os.path.join(self._tmp_dir, batch)
+        os.makedirs(batch_dir, exist_ok=True)
+        self._clean_old_batches()
+
+        counter = [0]
+
+        def _replace(m):
+            data_uri = m.group(0)
+            header, b64 = data_uri.split(',', 1)
+            mime = header.split(';')[0].split(':')[1]
+            ext = self._MIME_EXT.get(mime, '.png')
+            counter[0] += 1
+            filename = 'img%d%s' % (counter[0], ext)
+            with open(os.path.join(batch_dir, filename), 'wb') as f:
+                f.write(base64.b64decode(b64))
+            return 'http://127.0.0.1:%d/%s/%s' % (self._img_port, batch, filename)
+
+        result = self._DATA_URI_RE.sub(_replace, html)
+        return {'html': result, 'imageCount': counter[0]}
+
+    # ---------- 文件保存 ----------
+
+    def save_file(self, path, content):
+        """把编辑器内容写回磁盘 md 文件"""
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return {'ok': True}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
 
     # ---------- 文件 / 文件夹 ----------
 
+    def _scan_images(self, base_dir):
+        """递归扫描目录图片为 {相对路径: dataURI}，超 5MB 记入 skipped"""
+        images = {}
+        skipped = []
+        for root, _dirs, files in os.walk(base_dir):
+            for fn in files:
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in IMAGE_EXTS:
+                    continue
+                full = os.path.join(root, fn)
+                size = os.path.getsize(full)
+                rel = os.path.relpath(full, base_dir).replace('\\', '/')
+                if size > MAX_IMAGE_BYTES:
+                    skipped.append(rel)
+                    continue
+                with open(full, 'rb') as f:
+                    b64 = base64.b64encode(f.read()).decode('ascii')
+                mime = mimetypes.guess_type(fn)[0] or 'image/png'
+                images[rel] = 'data:%s;base64,%s' % (mime, b64)
+        return images, skipped
+
+    def _list_md(self, base_dir):
+        """递归列出目录内全部 Markdown 文件（相对路径，正斜杠，排序）"""
+        out = []
+        for root, _dirs, files in os.walk(base_dir):
+            for fn in files:
+                if fn.lower().endswith(('.md', '.markdown')):
+                    rel = os.path.relpath(os.path.join(root, fn), base_dir).replace('\\', '/')
+                    out.append(rel)
+        return sorted(out)
+
+    def _load_article(self, md_path, base_dir=None):
+        """读 md + 扫描 base 目录图片 + 列出 base 目录内 md。base 默认为 md 所在目录"""
+        md_path = os.path.abspath(md_path)
+        base = os.path.abspath(base_dir) if base_dir else os.path.dirname(md_path)
+        with open(md_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        images, skipped = self._scan_images(base)
+        return {
+            'name': os.path.basename(md_path),
+            'path': md_path,
+            'dir': base,
+            'content': content,
+            'images': images,
+            'skipped': skipped,
+            'files': self._list_md(base)
+        }
+
     def open_file(self, path=None):
-        """打开 Markdown 文件，返回 {name, content}。path 为空时弹原生对话框"""
+        """打开 Markdown 文件：读内容 + 扫描所在目录图片 + 列出同目录 md。
+        path 为空时弹原生对话框"""
         if not path:
             result = self._window.create_file_dialog(
                 webview.OPEN_DIALOG,
@@ -37,52 +187,30 @@ class Api:
             if not result:
                 return None
             path = result[0]
-        with open(path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        return {'name': os.path.basename(path), 'content': content}
+        return self._load_article(path)
 
     def open_folder(self, path=None):
-        """打开文章文件夹：读第一个 MD + 扫描全部图片为 dataURI 映射。
+        """打开文章文件夹：读第一个 MD + 扫描全部图片 + 列出全部 md。
         path 为空时弹原生对话框"""
         if not path:
             result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
             if not result:
                 return None
             path = result[0]
-        folder = path
-
-        mds = sorted(f for f in os.listdir(folder)
-                     if f.lower().endswith(('.md', '.markdown')))
+        mds = self._list_md(path)
         if not mds:
             return {'error': '该文件夹中没有 Markdown 文件'}
+        return self._load_article(os.path.join(path, mds[0]), base_dir=path)
 
-        with open(os.path.join(folder, mds[0]), 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        images = {}
-        skipped = []
-        for root, _dirs, files in os.walk(folder):
-            for fn in files:
-                ext = os.path.splitext(fn)[1].lower()
-                if ext not in IMAGE_EXTS:
-                    continue
-                full = os.path.join(root, fn)
-                size = os.path.getsize(full)
-                rel = os.path.relpath(full, folder).replace('\\', '/')
-                if size > MAX_IMAGE_BYTES:
-                    skipped.append(rel)
-                    continue
-                with open(full, 'rb') as f:
-                    b64 = base64.b64encode(f.read()).decode('ascii')
-                mime = mimetypes.guess_type(fn)[0] or 'image/png'
-                images[rel] = 'data:%s;base64,%s' % (mime, b64)
-
-        return {
-            'name': mds[0],
-            'content': content,
-            'images': images,
-            'skipped': skipped
-        }
+    def read_file(self, path):
+        """轻量读取单个 md 内容（文件栏切换用，不重扫图片，沿用已加载映射）"""
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return {'name': os.path.basename(path), 'path': os.path.abspath(path),
+                    'content': content}
+        except Exception as e:
+            return {'error': str(e)}
 
     def pick_images(self):
         """原生多选图片对话框，返回 [{name, dataUri}]"""

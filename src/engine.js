@@ -40,6 +40,27 @@ var MopaiEngine = (function () {
 
     md.use(window.markdownitFootnote);
 
+    // 源码行号映射：给块级元素注入 data-line，供预览点击定位编辑器源码行
+    md.core.ruler.push('mopai_sourcemap', function (state) {
+      for (var i = 0; i < state.tokens.length; i++) {
+        var t = state.tokens[i];
+        if (t.map && t.nesting >= 0 && t.type !== 'inline') {
+          t.attrSet('data-line', String(t.map[0]));
+        }
+      }
+    });
+    // fence / code_block 经 highlight 返回原始 HTML，需手动注入 data-line
+    function _wrapPre(rule) {
+      return function (tokens, idx, options, env, self) {
+        var html = rule.call(this, tokens, idx, options, env, self);
+        var t = tokens[idx];
+        var line = t.map ? t.map[0] : 0;
+        return html.replace(/<pre/, '<pre data-line="' + line + '"');
+      };
+    }
+    if (md.renderer.rules.fence) md.renderer.rules.fence = _wrapPre(md.renderer.rules.fence);
+    if (md.renderer.rules.code_block) md.renderer.rules.code_block = _wrapPre(md.renderer.rules.code_block);
+
     // External link tracking
     var externalLinks = [];
     var footnoteCounter = 0;
@@ -105,7 +126,11 @@ var MopaiEngine = (function () {
   function _walk(el, theme) {
     var tag = el.tagName ? el.tagName.toLowerCase() : '';
 
-    if (theme[tag] && !el.hasAttribute('data-mopai-skip-style')) {
+    // Inline `code` style must not apply to code blocks (code inside pre):
+    // it would paint a second background over the code-theme background.
+    var skipInlineCode = (tag === 'code' && _insidePre(el));
+
+    if (theme[tag] && !skipInlineCode && !el.hasAttribute('data-mopai-skip-style')) {
       _mergeStyle(el, theme[tag]);
     }
 
@@ -140,6 +165,15 @@ var MopaiEngine = (function () {
     for (var c = 0; c < children.length; c++) {
       _walk(children[c], theme);
     }
+  }
+
+  function _insidePre(el) {
+    var p = el.parentNode;
+    while (p) {
+      if (p.tagName && p.tagName.toLowerCase() === 'pre') return true;
+      p = p.parentNode;
+    }
+    return false;
   }
 
   function _wrapContent(h, styles) {
@@ -268,7 +302,10 @@ var MopaiEngine = (function () {
     html = inlineHighlightStyles(html);
 
     if (typeof MopaiTable !== 'undefined') {
-      html = MopaiTable.process(html, { wechat: !!(options && options.wechat) });
+      html = MopaiTable.process(html, {
+        wechat: !!(options && options.wechat),
+        primary: theme.primary || null
+      });
     }
 
     var fns = result.footnotes;

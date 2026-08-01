@@ -1,27 +1,48 @@
 /**
  * copy.js — Copy HTML to clipboard
- * 桌面模式（pywebview）：dataURI 图片先批量上传图床 → 替换 URL → CF_HTML 写剪贴板
- * 浏览器降级：直接写剪贴板（无上传能力）
+ * 本地模式（默认）：Python 把 dataURI 图片写临时文件，通过本地 HTTP 服务提供 localhost URL
+ * s.ee 模式：逐张上传图床，替换为公网 URL
+ * 浏览器降级：直接写剪贴板（无图片处理）
  * Called by: ui.js
  */
 var MopaiCopy = (function () {
   'use strict';
 
-  var _urlCache = {};   // dataURI 指纹 → 已上传 URL（本次会话内去重）
+  var _urlCache = {};   // dataURI 指纹 → 已上传 URL（s.ee 模式会话内去重）
 
-  function copyHTML(html, token, onProgress) {
-    var notify = onProgress || function () {};
+  /**
+   * @param {string} html — 含 dataURI 图片的 HTML
+   * @param {object} options — { mode: 'local'|'see', token: string, onProgress: fn }
+   */
+  function copyHTML(html, options) {
+    var opts = options || {};
+    var mode = opts.mode || 'local';
+    var token = opts.token || '';
+    var notify = opts.onProgress || function () {};
 
     if (!_isDesktop()) {
       return _copyToClipboard(html);
     }
 
-    return _uploadAll(html, token, notify).then(function (finalHtml) {
-      return window.pywebview.api.copy_html(finalHtml).then(function (res) {
-        if (res && res.ok) return;
-        // Python 剪贴板失败时降级到浏览器剪贴板
-        return _copyToClipboard(finalHtml);
+    if (mode === 'see') {
+      return _uploadAll(html, token, notify).then(function (finalHtml) {
+        return _writeClipboard(finalHtml);
       });
+    }
+
+    // 本地模式（默认）：Python 处理 dataURI → localhost URL
+    return window.pywebview.api.prepare_copy(html).then(function (res) {
+      if (!res || !res.html) {
+        return _writeClipboard(html); // 无图片或出错，直接复制原文
+      }
+      return _writeClipboard(res.html);
+    });
+  }
+
+  function _writeClipboard(html) {
+    return window.pywebview.api.copy_html(html).then(function (res) {
+      if (res && res.ok) return;
+      return _copyToClipboard(html);
     });
   }
 
@@ -31,10 +52,8 @@ var MopaiCopy = (function () {
            typeof window.pywebview.api.copy_html === 'function';
   }
 
-  /**
-   * 找出 HTML 中所有 dataURI 图片，逐张上传并替换为公开 URL。
-   * 相同内容图片只传一次。
-   */
+  // ---- s.ee 模式：逐张上传 ----
+
   function _uploadAll(html, token, notify) {
     var div = document.createElement('div');
     div.innerHTML = html;
@@ -58,7 +77,7 @@ var MopaiCopy = (function () {
     }
 
     if (!token) {
-      return Promise.reject(new Error('文章包含本地图片，但未配置图床 API Key（点 ⚙ 设置）'));
+      return Promise.reject(new Error('s.ee 模式需要 API Key（点 ⚙ 设置）'));
     }
 
     var done = 0;
@@ -100,6 +119,8 @@ var MopaiCopy = (function () {
   function _fp(dataUri) {
     return dataUri.length + ':' + dataUri.substring(dataUri.length - 64);
   }
+
+  // ---- 浏览器降级 ----
 
   function _copyToClipboard(html) {
     return new Promise(function (resolve, reject) {

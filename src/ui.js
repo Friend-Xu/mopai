@@ -6,8 +6,11 @@
 var MopaiUI = (function () {
   "use strict";
   var _els = {};
-  var _previewMode = "desktop";
+  var _previewMode = "mobile";
   var _scrollSyncing = false;
+  var _suppressSync = false;
+  var _debounceTimer = null;
+  var _dirty = false;
 
   function init() {
     MopaiState.init();
@@ -17,12 +20,12 @@ var MopaiUI = (function () {
     _restoreSession();
     _renderThemeSelect();
     _renderCodeThemeSelect();
-    _renderHistoryList();
+    _setupMobileMode();
     _updatePreview();
+    _restoreFolder();
+    document.addEventListener("click", _closeAllPanels);
     MopaiImageUpload.init(_els.editor, { onToast: _toast });
-    if (_els.tokenInput) {
-      _els.tokenInput.value = MopaiState.get("imageHostToken") || "";
-    }
+    _initSettingsMode();
   }
 
   function _cacheDOM() {
@@ -33,32 +36,50 @@ var MopaiUI = (function () {
     _els.codeThemeSelect = document.getElementById("code-theme-select");
     _els.mobileToggle = document.getElementById("mobile-toggle");
     _els.copyBtn = document.getElementById("btn-copy");
-    _els.exportBtn = document.getElementById("btn-export");
-    _els.openBtn = document.getElementById("btn-open");
+    _els.fileBtn = document.getElementById("btn-file");
     _els.uploadBtn = document.getElementById("btn-upload");
-    _els.folderBtn = document.getElementById("btn-folder");
     _els.settingsBtn = document.getElementById("btn-settings");
     _els.settingsPanel = document.getElementById("settings-panel");
     _els.tokenInput = document.getElementById("token-input");
     _els.tokenSave = document.getElementById("token-save");
     _els.tokenTest = document.getElementById("token-test");
     _els.tokenStatus = document.getElementById("token-status");
-    _els.historyList = document.getElementById("history-list");
+    _els.filePanel = document.getElementById("file-panel");
+    _els.fileFolder = document.getElementById("file-folder");
+    _els.fileList = document.getElementById("file-list");
     _els.filename = document.getElementById("filename");
     _els.charCount = document.getElementById("char-count");
     _els.toast = document.getElementById("toast");
     _els.fileInput = document.getElementById("file-input");
-    _els.historyToggle = document.getElementById("history-toggle");
-    _els.historyPanel = document.getElementById("history-panel");
+    _els.openMenuBtn = document.getElementById("btn-open-menu");
+    _els.openMenu = document.getElementById("open-menu");
+    _els.menuOpenFile = document.getElementById("menu-open-file");
+    _els.menuOpenFolder = document.getElementById("menu-open-folder");
+    _els.moreBtn = document.getElementById("btn-more");
+    _els.moreMenu = document.getElementById("more-menu");
+    _els.menuExport = document.getElementById("menu-export");
     _els.phoneFrame = document.getElementById("phone-frame");
     _els.phoneScreen = document.getElementById("phone-screen");
+    _els.refreshFilesBtn = document.getElementById("btn-refresh-files");
+    _els.seeSection = document.getElementById("see-section");
+    _els.editorPanel = document.getElementById("editor-panel");
   }
 
   function _bindEvents() {
+    // ① 链接禁跳
+    _els.preview.addEventListener("click", function (e) {
+      var a = e.target.closest("a");
+      if (a) e.preventDefault();
+    });
+    // ④ 预览点击 → 编辑器滚动定位
+    _els.preview.addEventListener("click", _onPreviewClick);
+
+    // 编辑器输入（debounce 预览）
     _els.editor.addEventListener("input", function () {
       MopaiState.set("markdown", _els.editor.value);
-      _updatePreview();
+      _dirty = true;
       _updateCharCount();
+      _debouncedPreview();
     });
     _els.themeSelect.addEventListener("change", function () {
       MopaiState.set("themeName", _els.themeSelect.value);
@@ -85,21 +106,19 @@ var MopaiUI = (function () {
     });
     _els.copyBtn.addEventListener("click", function () {
       _els.copyBtn.disabled = true;
-      MopaiCopy.copyHTML(
-        _generateOutput(),
-        MopaiState.get("imageHostToken") || "",
-        function (msg) { if (msg) _toast(msg); }
-      ).then(function () {
+      var origText = _els.copyBtn.textContent;
+      MopaiCopy.copyHTML(_generateOutput(), {
+        mode: MopaiState.get("imageMode") || "local",
+        token: MopaiState.get("imageHostToken") || "",
+        onProgress: function (msg) { if (msg) _els.copyBtn.textContent = msg; }
+      }).then(function () {
         _toast("已复制到剪贴板，可直接粘贴到公众号编辑器");
       }).catch(function (err) {
         _toast(err && err.message ? err.message : "复制失败，请手动选择预览区内容复制", true);
       }).finally(function () {
         _els.copyBtn.disabled = false;
+        _els.copyBtn.textContent = origText;
       });
-    });
-    _els.exportBtn.addEventListener("click", function () {
-      MopaiExport.exportHTML(_generateOutput(), MopaiState.get("title") || "mopai");
-      _toast("HTML 文件已导出");
     });
     _els.uploadBtn.addEventListener("click", function () {
       if (_isDesktop()) {
@@ -111,29 +130,37 @@ var MopaiUI = (function () {
         _toast("插入图片功能需要桌面版（mopai.cmd 启动）", true);
       }
     });
-    _els.folderBtn.addEventListener("click", function () {
-      if (!_isDesktop()) {
-        _toast("打开文件夹功能需要桌面版（mopai.cmd 启动）", true);
-        return;
-      }
-      _toast("读取文件夹中...");
-      window.pywebview.api.open_folder().then(function (res) {
-        if (!res) return;
-        if (res.error) { _toast(res.error, true); return; }
-        var n = MopaiAssets.setMap(res.images || {});
-        _loadContent(res.name, res.content);
-        _saveToHistory();
-        var msg = "已加载 " + res.name + "，识别 " + n + " 张图片";
-        if (res.skipped && res.skipped.length > 0) {
-          msg += "（" + res.skipped.length + " 张超过 5MB 已跳过）";
-        }
-        _toast(msg);
-      });
+    _els.fileBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var isOpen = _els.filePanel.style.display === "block";
+      _closeMenus();
+      _els.settingsPanel.style.display = "none";
+      _els.filePanel.style.display = isOpen ? "none" : "block";
+      _els.fileBtn.classList.toggle("active", !isOpen);
     });
-    _els.settingsBtn.addEventListener("click", function () {
+    _els.filePanel.addEventListener("click", function (e) {
+      e.stopPropagation();
+    });
+    _initDropdown(_els.openMenuBtn, _els.openMenu);
+    _initDropdown(_els.moreBtn, _els.moreMenu);
+    _els.menuOpenFile.addEventListener("click", function () { _closeMenus(); _openFileDialog(); });
+    _els.menuOpenFolder.addEventListener("click", function () { _closeMenus(); _openFolderDialog(); });
+    _els.menuExport.addEventListener("click", function () {
+      _closeMenus();
+      MopaiExport.exportHTML(_generateOutput(), MopaiState.get("title") || "mopai");
+      _toast("HTML 文件已导出");
+    });
+    _els.settingsBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
       var isOpen = _els.settingsPanel.style.display === "block";
+      _closeMenus();
+      _els.filePanel.style.display = "none";
+      _els.fileBtn.classList.remove("active");
       _els.settingsPanel.style.display = isOpen ? "none" : "block";
       if (!isOpen) _els.tokenInput.value = MopaiState.get("imageHostToken") || "";
+    });
+    _els.settingsPanel.addEventListener("click", function (e) {
+      e.stopPropagation();
     });
     _els.tokenSave.addEventListener("click", function () {
       MopaiState.set("imageHostToken", _els.tokenInput.value.trim());
@@ -144,78 +171,173 @@ var MopaiUI = (function () {
       if (!token) { _tokenStatus("请先填入 Token", "err"); return; }
       if (!_isDesktop()) { _tokenStatus("需要桌面版", "err"); return; }
       _tokenStatus("测试中...", "");
-      // 1x1 透明 PNG
       var tiny = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
       window.pywebview.api.upload_image(tiny, token).then(function (res) {
         if (res && res.ok) _tokenStatus("✓ 连接成功，Token 有效", "ok");
         else _tokenStatus("✗ " + ((res && res.error) || "测试失败"), "err");
       });
     });
-    _els.openBtn.addEventListener("click", function () {
-      if (_isDesktop()) {
-        window.pywebview.api.open_file().then(function (res) {
-          if (res && res.content != null) {
-            MopaiAssets.clear();
-            _loadContent(res.name, res.content);
-            _saveToHistory();
-          }
-        });
-      } else {
-        _els.fileInput.click();
-      }
-    });
+    _els.refreshFilesBtn.addEventListener("click", _refreshFiles);
     _els.fileInput.addEventListener("change", function () {
       var file = _els.fileInput.files[0];
       if (file) {
         MopaiFileIO.readFile(file, function (err, result) {
-          if (!err) { _loadContent(result.name, result.content); _saveToHistory(); }
+          if (!err) { MopaiAssets.clear(); _loadContent(result.name, result.content); }
         });
       }
       _els.fileInput.value = "";
     });
     MopaiFileIO.init(_els.editor, function (filename, content) {
+      MopaiAssets.clear();
       _loadContent(filename, content);
-      _saveToHistory();
-    });
-    if (_els.historyToggle) {
-      _els.historyToggle.addEventListener("click", function () {
-        var isOpen = _els.historyPanel.style.display === "block";
-        _els.historyPanel.style.display = isOpen ? "none" : "block";
-        if (!isOpen) _renderHistoryList();
-      });
-    }
-    document.addEventListener("keydown", function (e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        _saveToHistory();
-        _toast("已保存");
-      }
     });
 
-    // Scroll sync between editor and preview
-    _els.editor.addEventListener("scroll", function () {
-      _syncScroll("editor");
-    });
-    _els.phoneScreen.addEventListener("scroll", function () {
-      _syncScroll("preview");
-    });
-    _els.previewWrap.addEventListener("scroll", function () {
-      _syncScroll("preview");
+    // ⑦ 键盘快捷键
+    document.addEventListener("keydown", _onKeydown);
+
+    // Scroll sync
+    _els.editor.addEventListener("scroll", function () { _syncScroll("editor"); });
+    _els.phoneScreen.addEventListener("scroll", function () { _syncScroll("preview"); });
+    _els.previewWrap.addEventListener("scroll", function () { _syncScroll("preview"); });
+  }
+
+  // ---------- 打开文件 / 文件夹 ----------
+
+  function _openFileDialog() {
+    if (!_isDesktop()) { _els.fileInput.click(); return; }
+    window.pywebview.api.open_file().then(function (res) { _applyLoaded(res); });
+  }
+
+  function _openFolderDialog() {
+    if (!_isDesktop()) { _toast("打开文件夹功能需要桌面版（mopai.cmd 启动）", true); return; }
+    _toast("读取文件夹中...");
+    window.pywebview.api.open_folder().then(function (res) { _applyLoaded(res); });
+  }
+
+  function _applyLoaded(res) {
+    if (!res) return;
+    if (res.error) { _toast(res.error, true); return; }
+    var n = MopaiAssets.setMap(res.images || {});
+    _loadContent(res.name, res.content);
+    _setFolder(res.dir, res.files, res.path);
+    var msg = "已加载 " + res.name + "，识别 " + n + " 张图片";
+    if (res.skipped && res.skipped.length > 0) {
+      msg += "（" + res.skipped.length + " 张超过 5MB 已跳过）";
+    }
+    _toast(msg);
+  }
+
+  // ---------- 文件栏 ----------
+
+  function _setFolder(dir, files, currentPath) {
+    MopaiState.update({ folder: dir || "", currentPath: currentPath || "" });
+    _renderFileList(files || [], currentPath);
+  }
+
+  function _renderFileList(files, currentPath) {
+    if (!_els.fileList) return;
+    var dir = MopaiState.get("folder");
+    _els.fileFolder.textContent = dir || "";
+    _els.fileFolder.title = dir || "";
+    if (!files || files.length === 0) {
+      _els.fileList.innerHTML = '<div class="file-empty">该目录下没有 Markdown 文件</div>';
+      return;
+    }
+    var normCur = (currentPath || "").replace(/\\/g, "/");
+    var h = "";
+    for (var i = 0; i < files.length; i++) {
+      var active = normCur && _absPath(dir, files[i]) === normCur ? " active" : "";
+      h += '<div class="file-item' + active + '" data-rel="' + _esc(files[i]) + '" title="' + _esc(files[i]) + '">' + _esc(files[i]) + '</div>';
+    }
+    _els.fileList.innerHTML = h;
+    _els.fileList.querySelectorAll(".file-item").forEach(function (el) {
+      el.addEventListener("click", function () { _openMd(el.getAttribute("data-rel")); });
     });
   }
 
-  function _saveToHistory() {
-    if (_els.editor.value.trim()) {
-      MopaiState.set("markdown", _els.editor.value);
-      MopaiState.addToHistory();
-      _renderHistoryList();
+  function _absPath(dir, rel) {
+    var d = (dir || "").replace(/\\/g, "/").replace(/\/+$/, "");
+    return d ? d + "/" + rel : rel;
+  }
+
+  function _openMd(rel) {
+    if (_dirty && !confirm("当前文章有未保存的修改，确定切换吗？（Ctrl+S 可先保存）")) return;
+    var abs = _absPath(MopaiState.get("folder"), rel);
+    window.pywebview.api.read_file(abs).then(function (res) {
+      if (!res || res.error) { _toast((res && res.error) || "读取失败", true); return; }
+      _dirty = false;
+      MopaiState.update({ currentPath: res.path, title: res.name, markdown: res.content });
+      _els.editor.value = res.content;
+      _els.filename.textContent = res.name;
+      document.title = res.name + " — 墨排 Mopai";
+      _updatePreview();
+      _updateCharCount();
+      _renderFileListActive(res.path);
+    });
+  }
+
+  function _renderFileListActive(currentPath) {
+    var normCur = (currentPath || "").replace(/\\/g, "/");
+    _els.fileList.querySelectorAll(".file-item").forEach(function (el) {
+      var abs = _absPath(MopaiState.get("folder"), el.getAttribute("data-rel"));
+      el.classList.toggle("active", abs === normCur);
+    });
+  }
+
+  // ---------- 下拉菜单 ----------
+
+  function _initDropdown(btn, menu) {
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var open = menu.style.display === "block";
+      _closeMenus();
+      menu.style.display = open ? "none" : "block";
+    });
+  }
+
+  function _closeMenus() {
+    _els.openMenu.style.display = "none";
+    _els.moreMenu.style.display = "none";
+  }
+
+  function _closeAllPanels() {
+    _closeMenus();
+    if (_els.settingsPanel.style.display === "block") {
+      _els.settingsPanel.style.display = "none";
     }
+    if (_els.filePanel.style.display === "block") {
+      _els.filePanel.style.display = "none";
+      _els.fileBtn.classList.remove("active");
+    }
+  }
+
+  // ---------- 启动时恢复上次文件夹 ----------
+
+  function _restoreFolder() {
+    if (!_isDesktop()) return;
+    var cur = MopaiState.get("currentPath");
+    if (!cur) return;
+    window.pywebview.api.open_file(cur).then(function (res) {
+      if (!res || res.error) return;
+      MopaiAssets.setMap(res.images || {});
+      _setFolder(res.dir, res.files, res.path);
+      if (!_els.editor.value.trim()) {
+        _els.editor.value = res.content;
+        MopaiState.set("markdown", res.content);
+        _els.filename.textContent = res.name;
+        document.title = res.name + " — 墨排 Mopai";
+        _updateCharCount();
+      }
+      _updatePreview(); // A: setMap 后刷新预览，让图片解析为 dataURI
+    });
   }
 
   function _loadContent(filename, content) {
+    _dirty = false;
     MopaiState.update({ title: filename, markdown: content });
     _els.editor.value = content;
     _els.filename.textContent = filename || "(未保存)";
+    document.title = (filename || "墨排") + " — 墨排 Mopai";
     _updatePreview();
     _updateCharCount();
   }
@@ -225,6 +347,7 @@ var MopaiUI = (function () {
     if (state.markdown) {
       _els.editor.value = state.markdown;
       _els.filename.textContent = state.title || "(未保存)";
+      document.title = (state.title || "墨排") + " — 墨排 Mopai";
       _updateCharCount();
     }
     if (state.themeName) _els.themeSelect.value = state.themeName;
@@ -247,9 +370,14 @@ var MopaiUI = (function () {
   function _updatePreview() {
     var md = _els.editor.value || "";
     if (!md.trim()) {
-      _els.preview.innerHTML = "<p style=\"color:#ccc;text-align:center;padding:40px 0\">预览区</p>";
+      _els.preview.innerHTML = '<div class="preview-guide">' +
+        '<p>点击 <b>📂 打开</b> → 打开文件夹 加载文章</p>' +
+        '<p>或直接在左侧粘贴 Markdown 开始</p></div>';
       return;
     }
+    // ⑤ 保存滚动位置，渲染后恢复
+    var scroller = _previewMode === "mobile" ? _els.phoneScreen : _els.previewWrap;
+    var savedScroll = scroller.scrollTop;
     try {
       var name = _els.themeSelect.value || "山吹";
       var theme = _getTheme(name);
@@ -257,6 +385,12 @@ var MopaiUI = (function () {
     } catch (e) {
       _els.preview.innerHTML = "<p style=\"color:red\">渲染错误: " + e.message + "</p>";
     }
+    requestAnimationFrame(function () { scroller.scrollTop = savedScroll; });
+  }
+
+  function _debouncedPreview() {
+    clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(_updatePreview, 100);
   }
 
   function _generateOutput() {
@@ -270,7 +404,7 @@ var MopaiUI = (function () {
    * Uses a flag to prevent recursive scroll event triggering.
    */
   function _syncScroll(from) {
-    if (_scrollSyncing) return;
+    if (_scrollSyncing || _suppressSync) return;
     _scrollSyncing = true;
 
     var source = from === "editor" ? _els.editor : (_previewMode === "mobile" ? _els.phoneScreen : _els.previewWrap);
@@ -305,52 +439,6 @@ var MopaiUI = (function () {
     _els.codeThemeSelect.value = MopaiState.get("codeThemeId") || "debug-console";
   }
 
-  function _renderHistoryList() {
-    if (!_els.historyList) return;
-    var history = MopaiState.getHistory();
-    if (history.length === 0) { _els.historyList.innerHTML = "<div class=\"history-empty\">暂无保存记录</div>"; return; }
-    var h = "";
-    for (var i = 0; i < history.length; i++) {
-      var item = history[i];
-      var date = item.savedAt ? new Date(item.savedAt).toLocaleString("zh-CN") : "";
-      var title = item.title || "(未命名)";
-      var preview = (item.markdown || "").substring(0, 80).replace(/\n/g, " ") + "...";
-      h += "<div class=\"history-item\" data-index=\"" + i + "\">";
-      h += "<div class=\"history-item-title\">" + _esc(title) + "</div>";
-      h += "<div class=\"history-item-preview\">" + _esc(preview) + "</div>";
-      h += "<div class=\"history-item-meta\">" + (item.themeName || "") + " · " + date + "</div>";
-      h += "<button class=\"history-item-delete\" data-index=\"" + i + "\">&times;</button>";
-      h += "</div>";
-    }
-    _els.historyList.innerHTML = h;
-    _els.historyList.querySelectorAll(".history-item").forEach(function (el) {
-      el.addEventListener("click", function (e) {
-        if (e.target.classList.contains("history-item-delete")) return;
-        var idx = parseInt(el.getAttribute("data-index"));
-        var list = MopaiState.getHistory();
-        if (list[idx]) {
-          MopaiState.loadFromHistory(list[idx]);
-          _els.editor.value = list[idx].markdown || "";
-          _els.filename.textContent = list[idx].title || "(未保存)";
-          _els.themeSelect.value = MopaiState.get("themeName");
-          _els.codeThemeSelect.value = MopaiState.get("codeThemeId");
-          MopaiThemes.loadCodeTheme(MopaiState.get("codeThemeId"));
-          _updatePreview();
-          _updateCharCount();
-          _els.historyPanel.style.display = "none";
-        }
-      });
-    });
-    _els.historyList.querySelectorAll(".history-item-delete").forEach(function (btn) {
-      btn.addEventListener("click", function (e) {
-        e.stopPropagation();
-        var idx = parseInt(btn.getAttribute("data-index"));
-        MopaiState.deleteFromHistory(idx);
-        _renderHistoryList();
-      });
-    });
-  }
-
   function _updateCharCount() {
     _els.charCount.textContent = (_els.editor.value || "").length.toLocaleString() + " 字";
   }
@@ -375,6 +463,155 @@ var MopaiUI = (function () {
 
   function _esc(str) {
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // ---------- ③ 默认手机预览 ----------
+
+  function _setupMobileMode() {
+    if (_previewMode !== "mobile") return;
+    _els.phoneScreen.appendChild(_els.preview);
+    _els.phoneFrame.style.display = "";
+    _els.previewWrap.classList.add("preview-mobile");
+    _els.mobileToggle.textContent = "📱 375px";
+    _els.mobileToggle.classList.add("active");
+  }
+
+  // ---------- ④ 预览点击 → 编辑器源码行定位 ----------
+
+  function _onPreviewClick(e) {
+    if (e.target.closest("a")) return; // 链接只禁跳，不定位
+    var el = e.target.closest("[data-line]");
+    if (!el) return;
+    var line = parseInt(el.getAttribute("data-line"), 10);
+    if (isNaN(line)) return;
+    _revealEditorLine(line);
+  }
+
+  function _revealEditorLine(line) {
+    var ed = _els.editor;
+    var lines = ed.value.split("\n");
+    line = Math.max(0, Math.min(line, lines.length - 1));
+
+    var start = 0;
+    for (var i = 0; i < line; i++) start += lines[i].length + 1;
+
+    var lineTop = _measureLineTop(line);
+
+    // 定位期间暂停滚动同步，避免编辑器滚动反过来拖动预览、打乱点击位置
+    _suppressSync = true;
+    ed.focus();
+    ed.setSelectionRange(start, start); // 折叠光标定位到行首（不选中，避免误覆盖）
+    ed.scrollTop = Math.max(0, lineTop - ed.clientHeight / 2);
+    setTimeout(function () { _suppressSync = false; }, 150);
+
+    _flashAt(lineTop - ed.scrollTop);
+  }
+
+  // 镜像测量：精确计算某源码行在 textarea 中的像素高度（处理中文换行）
+  function _measureLineTop(line) {
+    var ed = _els.editor;
+    var cs = getComputedStyle(ed);
+    var padT = parseFloat(cs.paddingTop) || 0;
+    var padL = parseFloat(cs.paddingLeft) || 0;
+    var padR = parseFloat(cs.paddingRight) || 0;
+    if (line <= 0) return padT;
+
+    var mirror = document.createElement("div");
+    mirror.style.cssText =
+      "position:absolute;top:-9999px;left:-9999px;visibility:hidden;" +
+      "white-space:pre-wrap;overflow-wrap:break-word;word-break:break-all;" +
+      "box-sizing:border-box;padding:0;margin:0;" +
+      "width:" + (ed.clientWidth - padL - padR) + "px;" +
+      "font-family:" + cs.fontFamily + ";font-size:" + cs.fontSize + ";" +
+      "line-height:" + cs.lineHeight + ";letter-spacing:" + cs.letterSpacing + ";";
+    mirror.textContent = ed.value.split("\n").slice(0, line).join("\n");
+    document.body.appendChild(mirror);
+    var h = mirror.offsetHeight;
+    document.body.removeChild(mirror);
+    return padT + h;
+  }
+
+  function _flashAt(topPx) {
+    var existing = _els.editorPanel.querySelector(".editor-highlight");
+    if (existing) existing.remove();
+    var lineH = parseFloat(getComputedStyle(_els.editor).lineHeight) || 22;
+    var el = document.createElement("div");
+    el.className = "editor-highlight";
+    el.style.top = topPx + "px";
+    el.style.height = lineH + "px";
+    _els.editorPanel.style.position = "relative";
+    _els.editorPanel.appendChild(el);
+    setTimeout(function () { el.style.opacity = "0"; }, 700);
+    setTimeout(function () { el.remove(); }, 1300);
+  }
+
+  // ---------- ⑦ 键盘快捷键 ----------
+
+  function _onKeydown(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "o") {
+      e.preventDefault();
+      _openFileDialog();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      e.preventDefault();
+      _saveToFile();
+    }
+    if (e.key === "Escape") {
+      _closeAllPanels();
+    }
+  }
+
+  // ---------- ⑥ 保存回文件 ----------
+
+  function _saveToFile() {
+    var path = MopaiState.get("currentPath");
+    if (!path) { _toast("请先用「📂 打开」关联一个文件", true); return; }
+    if (!_isDesktop()) { _toast("保存功能需要桌面版", true); return; }
+    window.pywebview.api.save_file(path, _els.editor.value).then(function (res) {
+      if (res && res.ok) {
+        _dirty = false;
+        _toast("已保存到 " + (MopaiState.get("title") || path));
+      } else {
+        _toast("保存失败: " + ((res && res.error) || "未知错误"), true);
+      }
+    });
+  }
+
+  // ---------- F 文件栏刷新 ----------
+
+  function _refreshFiles() {
+    var dir = MopaiState.get("folder");
+    if (!dir) { _toast("尚未打开文件夹", true); return; }
+    if (!_isDesktop()) return;
+    window.pywebview.api.open_folder(dir).then(function (res) {
+      if (!res || res.error) { _toast((res && res.error) || "刷新失败", true); return; }
+      _renderFileList(res.files || [], MopaiState.get("currentPath"));
+      _toast("文件列表已刷新");
+    });
+  }
+
+  // ---------- 设置：图床模式选择 ----------
+
+  function _initSettingsMode() {
+    var mode = MopaiState.get("imageMode") || "local";
+    var radios = document.querySelectorAll('input[name="image-mode"]');
+    for (var i = 0; i < radios.length; i++) {
+      radios[i].checked = (radios[i].value === mode);
+      radios[i].addEventListener("change", _onModeChange);
+    }
+    _toggleSeeSection(mode);
+  }
+
+  function _onModeChange(e) {
+    var mode = e.target.value;
+    MopaiState.set("imageMode", mode);
+    _toggleSeeSection(mode);
+  }
+
+  function _toggleSeeSection(mode) {
+    if (_els.seeSection) {
+      _els.seeSection.style.display = mode === "see" ? "block" : "none";
+    }
   }
 
   return { init: init };

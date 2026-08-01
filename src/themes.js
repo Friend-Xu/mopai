@@ -30,6 +30,7 @@ var MopaiThemes = (function () {
     // ================================================================
     '山吹': {
       label: '山吹',
+      primary: '#e8a212',
       body: Object.assign({}, BASE, {
         fontFamily: SANS,
         padding: '8px 16px 24px',
@@ -72,6 +73,7 @@ var MopaiThemes = (function () {
     // ================================================================
     '橙心': {
       label: '橙心',
+      primary: '#ef7060',
       body: Object.assign({}, BASE, {
         fontFamily: SANS,
         padding: '8px 16px 24px',
@@ -114,6 +116,7 @@ var MopaiThemes = (function () {
     // ================================================================
     '极客黑': {
       label: '极客黑',
+      primary: '#212122',
       body: Object.assign({}, BASE, {
         fontFamily: '"Helvetica Neue", Helvetica, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif',
         fontSize: '15px',
@@ -158,6 +161,7 @@ var MopaiThemes = (function () {
     // ================================================================
     '蔷薇紫': {
       label: '蔷薇紫',
+      primary: '#a06ae8',
       body: Object.assign({}, BASE, {
         fontFamily: 'Optima, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
         fontSize: '15px',
@@ -202,6 +206,7 @@ var MopaiThemes = (function () {
     // ================================================================
     '萌绿': {
       label: '萌绿',
+      primary: '#35b378',
       body: Object.assign({}, BASE, {
         fontFamily: SANS,
         fontSize: '15px',
@@ -242,6 +247,7 @@ var MopaiThemes = (function () {
     // ================================================================
     '兰青': {
       label: '兰青',
+      primary: '#1e9bc3',
       body: Object.assign({}, BASE, {
         fontFamily: SANS,
         padding: '8px 16px 24px',
@@ -412,6 +418,7 @@ var MopaiThemes = (function () {
 
   function getCodeThemeColors(id) {
     var ct = codeThemes.find(function (t) { return t.id === id; });
+    if (!ct) ct = codeThemes[0]; // unknown/stale id → default theme
     return ct ? { bg: ct.bg, text: ct.text, border: ct.border, hljs: ct.hljs } : null;
   }
 

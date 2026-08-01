@@ -22,7 +22,7 @@ var MopaiTable = (function () {
     for (var i = 0; i < tables.length; i++) {
       var table = tables[i];
       var strategy = _analyze(table, opts);
-      _applyStrategy(table, strategy);
+      _applyStrategy(table, strategy, opts);
     }
 
     return div.innerHTML;
@@ -84,12 +84,13 @@ var MopaiTable = (function () {
     return total > 0 && (keyCount / total) >= 0.6;
   }
 
-  function _applyStrategy(table, s) {
+  function _applyStrategy(table, s, opts) {
+    var primary = (opts && opts.primary) || '#3a7bd5';
     switch (s.type) {
       case 'fixed': _fixed(table); break;
-      case 'cards': _toCards(table); break;
+      case 'cards': _toCards(table, primary); break;
       case 'scroll': _scroll(table); break;
-      case 'keyvalue': _toDL(table); break;
+      case 'keyvalue': _toDL(table, primary); break;
     }
   }
 
@@ -114,7 +115,7 @@ var MopaiTable = (function () {
   }
 
   // Card layout: each row → mini <table> (WeChat preserves bg+border on table elements)
-  function _toCards(table) {
+  function _toCards(table, primary) {
     var rows = table.querySelectorAll('tr');
     if (rows.length < 2) { _fixed(table); return; }
 
@@ -137,7 +138,7 @@ var MopaiTable = (function () {
       var cardTr = document.createElement('tr');
       var cardTd = document.createElement('td');
       cardTd.setAttribute('style',
-        'padding:14px 16px;background:#fafbfc;border:0;border-left:4px solid #3a7bd5');
+        'padding:14px 16px;background:#fafbfc;border:0;border-left:4px solid ' + primary);
 
       for (var c = 0; c < cells.length && c < headers.length; c++) {
         var label = headers[c];
@@ -207,7 +208,7 @@ var MopaiTable = (function () {
     }
   }
 
-  function _toDL(table) {
+  function _toDL(table, primary) {
     var dl = document.createElement('dl');
     dl.setAttribute('style', 'margin:16px 0');
     var rows = table.querySelectorAll('tr');
@@ -217,7 +218,7 @@ var MopaiTable = (function () {
       var dt = document.createElement('dt');
       dt.setAttribute('style',
         'font-weight:bold;margin:14px 0 4px;padding-left:10px;' +
-        'border-left:3px solid #3a7bd5;color:#1a1a1a;font-size:14px');
+        'border-left:3px solid ' + primary + ';color:#1a1a1a;font-size:14px');
       dt.innerHTML = cells[0].innerHTML;
       var dd = document.createElement('dd');
       dd.setAttribute('style',

@@ -90,27 +90,38 @@ body {
   .phone-frame { width: 100%; border: none; border-radius: 0; box-shadow: none; height: 100%; max-height: none; }
   .phone-home-bar { display: none; }
 }
-.history-panel {
-  display: none; position: fixed; top: 48px; right: 0; width: 320px;
-  height: calc(100vh - 48px); background: #fff; border-left: 1px solid #e8e8e8;
-  box-shadow: -2px 0 8px rgba(0,0,0,0.06); z-index: 100; overflow-y: auto;
+/* ---- File sidebar ---- */
+.file-panel {
+  display: none; position: fixed; top: 48px; left: 0; width: 250px;
+  height: calc(100vh - 48px); background: #fff; border-right: 1px solid #e8e8e8;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.06); z-index: 100; overflow-y: auto;
 }
-.history-panel h3 { font-size: 15px; padding: 16px; border-bottom: 1px solid #eee; color: #333; }
-.history-empty { padding: 24px 16px; color: #ccc; text-align: center; font-size: 14px; }
-.history-item {
-  padding: 12px 16px; border-bottom: 1px solid #f5f5f5; cursor: pointer;
-  position: relative; transition: background 0.1s;
+.file-panel h3 { font-size: 15px; padding: 16px 16px 8px; color: #333; }
+.file-folder {
+  font-size: 11px; color: #aaa; padding: 0 16px 10px; border-bottom: 1px solid #f0f0f0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.history-item:hover { background: #f8fafe; }
-.history-item-title { font-size: 14px; font-weight: 500; color: #333; margin-bottom: 4px; }
-.history-item-preview { font-size: 12px; color: #999; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
-.history-item-meta { font-size: 11px; color: #bbb; }
-.history-item-delete {
-  position: absolute; top: 12px; right: 12px; width: 22px; height: 22px;
-  border: none; background: none; color: #ccc; font-size: 16px; cursor: pointer;
-  border-radius: 50%; line-height: 22px; text-align: center;
+.file-empty { padding: 24px 16px; color: #ccc; text-align: center; font-size: 13px; }
+.file-item {
+  padding: 9px 16px; cursor: pointer; font-size: 13px; color: #444;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background 0.1s;
+  border-left: 2px solid transparent;
 }
-.history-item-delete:hover { color: #e74c3c; background: #fef0ef; }
+.file-item:hover { background: #f8fafe; }
+.file-item.active { background: #e8f0fe; color: #3a7bd5; border-left-color: #3a7bd5; font-weight: 500; }
+/* ---- Toolbar dropdown ---- */
+.dropdown { position: relative; }
+.dropdown-menu {
+  display: none; position: absolute; top: 36px; left: 0; min-width: 150px;
+  background: #fff; border: 1px solid #e0e0e0; border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12); z-index: 150; padding: 4px;
+}
+.dropdown-menu.right { left: auto; right: 0; }
+.dropdown-item {
+  padding: 8px 14px; font-size: 13px; color: #333; cursor: pointer;
+  border-radius: 4px; white-space: nowrap;
+}
+.dropdown-item:hover { background: #f0f6ff; color: #3a7bd5; }
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: #333; color: #fff; padding: 10px 24px; border-radius: 6px;
@@ -141,6 +152,35 @@ body {
 #token-status { font-size: 12px; color: #888; }
 #token-status.ok { color: #35b378; }
 #token-status.err { color: #d9553f; }
+/* ---- Settings mode selector ---- */
+.settings-mode { margin-bottom: 14px; }
+.mode-option {
+  display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px;
+  border: 1px solid #e0e0e0; border-radius: 6px; margin-bottom: 8px; cursor: pointer;
+  transition: border-color 0.15s;
+}
+.mode-option:hover { border-color: #3a7bd5; }
+.mode-option input[type="radio"] { margin-top: 3px; accent-color: #3a7bd5; width: auto; height: auto; }
+.mode-title { font-size: 13px; font-weight: 500; color: #333; }
+.mode-desc { font-size: 11px; color: #999; margin-top: 2px; }
+/* ---- File panel header ---- */
+.file-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 8px; }
+.file-panel-header h3 { font-size: 15px; color: #333; margin: 0; padding: 0; }
+#btn-refresh-files {
+  width: 26px; height: 26px; border: none; background: none; color: #aaa;
+  font-size: 16px; cursor: pointer; border-radius: 4px; line-height: 26px; text-align: center;
+}
+#btn-refresh-files:hover { color: #3a7bd5; background: #f0f6ff; }
+/* ---- Preview guide ---- */
+.preview-guide { color: #ccc; text-align: center; padding: 60px 20px; font-size: 14px; line-height: 2.2; }
+.preview-guide b { color: #3a7bd5; }
+/* ---- Phone mode: no scrollbar on pre ---- */
+.phone-screen .preview-content pre { overflow: hidden; white-space: pre-wrap; word-break: break-all; }
+/* ---- Editor line highlight (preview click feedback) ---- */
+.editor-highlight {
+  position: absolute; left: 0; right: 0; background: rgba(255, 177, 27, 0.25);
+  pointer-events: none; transition: opacity 0.3s; z-index: 5;
+}
 </style>
 </head>
 <body>
@@ -148,18 +188,28 @@ body {
 <div class="toolbar">
   <div class="logo">墨排<span>Mopai</span></div>
   <div class="sep"></div>
+  <button id="btn-file" title="文件列表">📄 文件</button>
   <span class="filename" id="filename">(未保存)</span>
   <div class="spacer"></div>
   <select id="theme-select" title="文章主题"></select>
   <select id="code-theme-select" title="代码主题"></select>
   <button id="mobile-toggle" title="手机预览">📱 手机预览</button>
-  <button id="history-toggle" title="历史记录">📋 历史</button>
   <div class="sep"></div>
-  <button id="btn-open">📂 打开文件</button>
-  <button id="btn-folder" title="打开文章文件夹（含图片）">📁 打开文件夹</button>
+  <div class="dropdown">
+    <button id="btn-open-menu">📂 打开 ▾</button>
+    <div class="dropdown-menu" id="open-menu">
+      <div class="dropdown-item" id="menu-open-file">打开文件…</div>
+      <div class="dropdown-item" id="menu-open-folder">打开文件夹…</div>
+    </div>
+  </div>
   <button id="btn-upload" title="插入图片">🖼 插入图片</button>
   <button id="btn-settings" title="图床设置">⚙</button>
-  <button id="btn-export">💾 导出 HTML</button>
+  <div class="dropdown">
+    <button id="btn-more" title="更多">⋯</button>
+    <div class="dropdown-menu right" id="more-menu">
+      <div class="dropdown-item" id="menu-export">导出 HTML</div>
+    </div>
+  </div>
   <button id="btn-copy" class="primary">📋 复制到公众号</button>
   <span class="char-count" id="char-count">0 字</span>
   <input type="file" id="file-input" accept=".md,.markdown,.txt">
@@ -167,16 +217,30 @@ body {
 
 <div class="settings-panel" id="settings-panel">
   <h3>图床设置</h3>
-  <p class="settings-desc">
-    文章中的本地图片会在「复制到公众号」时自动上传到 s.ee 图床（原 SM.MS）。
-    请到 <b>s.ee</b> 注册账号，在 Dashboard → API Key 页面生成密钥后填入下方。
-  </p>
-  <label class="settings-label">s.ee API Key</label>
-  <input type="password" id="token-input" placeholder="粘贴你的 SM.MS Token">
-  <div class="settings-actions">
-    <button id="token-save" class="primary">保存</button>
-    <button id="token-test">测试上传</button>
-    <span id="token-status"></span>
+  <div class="settings-mode">
+    <label class="mode-option">
+      <input type="radio" name="image-mode" value="local" checked>
+      <div>
+        <div class="mode-title">本地 HTTP（默认，免费）</div>
+        <div class="mode-desc">复制时启动本机临时服务提供图片，无需注册</div>
+      </div>
+    </label>
+    <label class="mode-option">
+      <input type="radio" name="image-mode" value="see">
+      <div>
+        <div class="mode-title">s.ee 图床</div>
+        <div class="mode-desc">上传到公共图床（需要 API Key）</div>
+      </div>
+    </label>
+  </div>
+  <div id="see-section" style="display:none">
+    <label class="settings-label">s.ee API Key</label>
+    <input type="password" id="token-input" placeholder="粘贴你的 API Key">
+    <div class="settings-actions">
+      <button id="token-save" class="primary">保存</button>
+      <button id="token-test">测试上传</button>
+      <span id="token-status"></span>
+    </div>
   </div>
 </div>
 
@@ -187,7 +251,10 @@ body {
   <div class="preview-panel">
     <div class="preview-wrap" id="preview-wrap">
       <div class="preview-content" id="preview">
-        <p style="color:#ccc;text-align:center;padding:40px 0">预览区</p>
+        <div class="preview-guide">
+          <p>点击 <b>📂 打开</b> → 打开文件夹 加载文章</p>
+          <p>或直接在左侧粘贴 Markdown 开始</p>
+        </div>
       </div>
       <div class="phone-frame" id="phone-frame" style="display:none">
         <div class="phone-status-bar">
@@ -201,9 +268,13 @@ body {
   </div>
 </div>
 
-<div class="history-panel" id="history-panel">
-  <h3>历史记录</h3>
-  <div id="history-list"><div class="history-empty">暂无保存记录</div></div>
+<div class="file-panel" id="file-panel">
+  <div class="file-panel-header">
+    <h3>文件</h3>
+    <button id="btn-refresh-files" title="刷新文件列表">↻</button>
+  </div>
+  <div class="file-folder" id="file-folder"></div>
+  <div id="file-list"><div class="file-empty">尚未打开文件或文件夹</div></div>
 </div>
 
 <div class="toast" id="toast"></div>

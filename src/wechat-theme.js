@@ -18,6 +18,7 @@ var MopaiWechat = (function () {
     // ================================================================
     '墨排·Pro': {
       label: '墨排·Pro',
+      primary: '#059669',
       body: {
         padding: '16px 18px 28px',
         backgroundColor: '#ffffff',
@@ -57,6 +58,7 @@ var MopaiWechat = (function () {
     // ================================================================
     '墨排·极简': {
       label: '墨排·极简',
+      primary: '#52525b',
       body: {
         padding: '16px 18px 28px',
         backgroundColor: '#ffffff',
@@ -96,6 +98,7 @@ var MopaiWechat = (function () {
     // ================================================================
     '墨排·暖读': {
       label: '墨排·暖读',
+      primary: '#b45309',
       body: {
         padding: '16px 18px 28px',
         backgroundColor: '#fefcf8',
@@ -135,6 +138,7 @@ var MopaiWechat = (function () {
     // ================================================================
     '墨排·杂志': {
       label: '墨排·杂志',
+      primary: '#dc2626',
       body: {
         padding: '16px 18px 28px',
         backgroundColor: '#ffffff',
@@ -174,6 +178,7 @@ var MopaiWechat = (function () {
     // ================================================================
     '墨排·禅意': {
       label: '墨排·禅意',
+      primary: '#4a5d52',
       body: {
         padding: '20px 20px 34px',
         backgroundColor: '#fafbfb',
