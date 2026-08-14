@@ -90,15 +90,17 @@ class Api:
         'image/webp': '.webp', 'image/svg+xml': '.svg', 'image/bmp': '.bmp'
     }
 
-    def prepare_copy(self, html):
-        """把 HTML 中的 dataURI 图片解码写到临时文件，替换为 localhost URL。
-        返回 {html, imageCount}"""
+    def _new_batch_dir(self):
         self._batch_counter += 1
         batch = 'b%d' % self._batch_counter
         batch_dir = os.path.join(self._tmp_dir, batch)
         os.makedirs(batch_dir, exist_ok=True)
         self._clean_old_batches()
+        return batch, batch_dir
 
+    def _replace_data_uris(self, text, batch, batch_dir):
+        """把文本中的 dataURI 图片解码写临时文件，替换为 localhost URL。
+        返回 (新文本, 图片数)"""
         counter = [0]
 
         def _replace(m):
@@ -112,8 +114,21 @@ class Api:
                 f.write(base64.b64decode(b64))
             return 'http://127.0.0.1:%d/%s/%s' % (self._img_port, batch, filename)
 
-        result = self._DATA_URI_RE.sub(_replace, html)
-        return {'html': result, 'imageCount': counter[0]}
+        return self._DATA_URI_RE.sub(_replace, text), counter[0]
+
+    def prepare_copy(self, html):
+        """把 HTML 中的 dataURI 图片解码写到临时文件，替换为 localhost URL。
+        返回 {html, imageCount}"""
+        batch, batch_dir = self._new_batch_dir()
+        result, count = self._replace_data_uris(html, batch, batch_dir)
+        return {'html': result, 'imageCount': count}
+
+    def prepare_markdown(self, md):
+        """把 Markdown 源码中的 dataURI 图片替换为 localhost URL（复制源码用）。
+        返回 {markdown, imageCount}"""
+        batch, batch_dir = self._new_batch_dir()
+        result, count = self._replace_data_uris(md, batch, batch_dir)
+        return {'markdown': result, 'imageCount': count}
 
     # ---------- 文件保存 ----------
 

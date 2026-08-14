@@ -57,6 +57,7 @@ var MopaiUI = (function () {
     _els.menuOpenFolder = document.getElementById("menu-open-folder");
     _els.moreBtn = document.getElementById("btn-more");
     _els.moreMenu = document.getElementById("more-menu");
+    _els.menuCopyMarkdown = document.getElementById("menu-copy-markdown");
     _els.menuExport = document.getElementById("menu-export");
     _els.phoneFrame = document.getElementById("phone-frame");
     _els.phoneScreen = document.getElementById("phone-screen");
@@ -145,6 +146,7 @@ var MopaiUI = (function () {
     _initDropdown(_els.moreBtn, _els.moreMenu);
     _els.menuOpenFile.addEventListener("click", function () { _closeMenus(); _openFileDialog(); });
     _els.menuOpenFolder.addEventListener("click", function () { _closeMenus(); _openFolderDialog(); });
+    _els.menuCopyMarkdown.addEventListener("click", function () { _closeMenus(); _copyMarkdownSource(); });
     _els.menuExport.addEventListener("click", function () {
       _closeMenus();
       MopaiExport.exportHTML(_generateOutput(), MopaiState.get("title") || "mopai");
@@ -574,6 +576,24 @@ var MopaiUI = (function () {
       } else {
         _toast("保存失败: " + ((res && res.error) || "未知错误"), true);
       }
+    });
+  }
+
+  // ---------- 复制 Markdown 源码（CSDN/掘金等平台粘贴） ----------
+
+  function _copyMarkdownSource() {
+    var mode = MopaiState.get("imageMode") || "local";
+    MopaiCopy.copyMarkdown(_els.editor.value || "", {
+      mode: mode,
+      token: MopaiState.get("imageHostToken") || "",
+      onProgress: function (msg) { if (msg) _toast(msg); }
+    }).then(function () {
+      var tip = mode === "local"
+        ? "已复制 Markdown 源码（图片为临时本地链接，CSDN 建议在 ⚙ 切到 s.ee 模式）"
+        : "已复制 Markdown 源码（图片已替换为 s.ee 链接）";
+      _toast(tip);
+    }).catch(function (err) {
+      _toast(err && err.message ? err.message : "复制失败", true);
     });
   }
 
