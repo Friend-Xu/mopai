@@ -276,6 +276,8 @@ var MopaiUI = (function () {
       _updatePreview();
       _updateCharCount();
       _renderFileListActive(res.path);
+    }).catch(function () {
+      _toast("读取失败", true);
     });
   }
 
@@ -317,11 +319,21 @@ var MopaiUI = (function () {
   // ---------- 启动时恢复上次文件夹 ----------
 
   function _restoreFolder() {
-    if (!_isDesktop()) return;
+    // pywebview 桥在页面脚本之后才注入（实测晚于 DOMContentLoaded ~11ms），
+    // init 时 window.pywebview 尚不存在，必须等桥就绪后再恢复
+    if (!_isDesktop()) {
+      var tries = 0;
+      var t = setInterval(function () {
+        tries++;
+        if (_isDesktop()) { clearInterval(t); _restoreFolder(); }
+        else if (tries > 60) clearInterval(t);
+      }, 100);
+      return;
+    }
     var cur = MopaiState.get("currentPath");
     if (!cur) return;
     window.pywebview.api.open_file(cur).then(function (res) {
-      if (!res || res.error) return;
+      if (!res || res.error) { _restoreFolderFallback(cur); return; }
       MopaiAssets.setMap(res.images || {});
       _setFolder(res.dir, res.files, res.path);
       if (!_els.editor.value.trim()) {
@@ -332,6 +344,54 @@ var MopaiUI = (function () {
         _updateCharCount();
       }
       _updatePreview(); // A: setMap 后刷新预览，让图片解析为 dataURI
+    }).catch(function () {
+      _restoreFolderFallback(cur);
+    });
+  }
+
+  function _restoreFolderFallback(prevPath) {
+    // 上次的文件已移动/删除：打开上次的文件夹，尝试按文件名自动定位
+    var dir = MopaiState.get("folder");
+    var baseName = prevPath ? String(prevPath).split(/[\\/]/).pop() : "";
+    if (!dir) { _toast("上次打开的文件已移动或删除，请重新打开", true); return; }
+    window.pywebview.api.open_folder(dir).then(function (r) {
+      if (!r || r.error) { _toast("上次打开的文件已移动或删除，请重新打开", true); return; }
+      _setFolder(r.dir, r.files, r.path);
+      var match = null;
+      if (baseName) {
+        var base = baseName.toLowerCase().replace(/\.(md|markdown)$/i, "");
+        for (var i = 0; i < r.files.length; i++) {
+          var fname = r.files[i].split("/").pop();
+          if (fname === baseName) { match = r.files[i]; break; }
+          if (match) continue;
+          var fb = fname.toLowerCase().replace(/\.(md|markdown)$/i, "");
+          if (base && (fb.indexOf(base) !== -1 || base.indexOf(fb) !== -1)) match = r.files[i];
+        }
+      }
+      if (match) {
+        window.pywebview.api.read_file(_absPath(r.dir, match)).then(function (fr) {
+          if (fr && !fr.error) {
+            MopaiAssets.setMap(fr.images || {});
+            MopaiState.update({ currentPath: fr.path, title: fr.name });
+            if (!_els.editor.value.trim()) {
+              _els.editor.value = fr.content;
+              MopaiState.set("markdown", fr.content);
+            }
+            _els.filename.textContent = fr.name;
+            document.title = fr.name + " — 墨排 Mopai";
+            _updateCharCount();
+            _renderFileListActive(fr.path);
+            _toast("上次的文章位置有变动，已自动定位");
+          }
+          _updatePreview();
+        }).catch(function () { _updatePreview(); });
+        return;
+      }
+      if (!_els.editor.value.trim()) _loadContent(r.name, r.content);
+      _toast("上次打开的文件未找到，已打开所在文件夹", true);
+      _updatePreview();
+    }).catch(function () {
+      _toast("上次打开的文件已移动或删除，请重新打开", true);
     });
   }
 
