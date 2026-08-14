@@ -22,6 +22,7 @@ test/cdp_eval.py     ← CDP 调试工具（见下文"调试"）
 | `open_folder(path?)` | 打开文章文件夹：读第一个 MD + 扫描全部图片为 `{相对路径: dataURI}` |
 | `pick_images()` | 原生多选图片对话框 |
 | `upload_image(dataUri, token)` | 上传到 s.ee 图床（原 SM.MS 兼容 API），返回 `{ok, url}` |
+| `upload_image_github(dataUri, token, repo)` | 上传到 GitHub 仓库（SHA256 指纹文件名去重），返回 jsDelivr CDN URL `{ok, url}` |
 | `copy_html(html)` | CF_HTML + CF_UNICODETEXT 双格式写剪贴板 |
 
 **Win32 ctypes 注意**：所有句柄/指针函数必须声明 `restype/argtypes`（见 `_setup_win32()`），否则 64 位下指针截断导致 access violation。
@@ -58,8 +59,10 @@ hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
 - **5 套墨排主题**（wechat-theme.js）：墨排·Pro/极简/暖读/杂志/禅意（wechat 模式：表格包裹保背景 + 宽表全转卡片）
 - **5 套代码配色**：VS Code Dark+/Light+、GitHub、Monokai、Solarized Light（hljs token → 内联色值映射）
 
-## 图床
-**s.ee**（SM.MS 官方迁移目标，API 兼容）：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`。用户在 ⚙ 设置面板填 Key（存 localStorage），面板带 1px 测试图连通性验证。
+## 图床（三模式，⚙ 设置面板切换）
+- **本地 HTTP（默认，仅微信）**：Python 把 dataURI 写临时文件 + 127.0.0.1 随机端口 HTTP 服务；微信粘贴时**浏览器端**抓图上传微信 CDN。CSDN 是**服务端**抓图，访问不到 localhost，不可用
+- **GitHub 图床（免费，CSDN 用）**：`PUT https://api.github.com/repos/{repo}/contents/{path}`，文件名 = 图片内容 SHA256 前 16 位（同图跨会话去重），返回 `https://cdn.jsdelivr.net/gh/{repo}@{default_branch}/{path}`。仓库须公开。用户仓库：Friend-Xu/mopai-images
+- **s.ee（付费备选）**：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`。用户在 ⚙ 设置面板填 Key（存 localStorage），面板带 1px 测试图连通性验证
 
 ## 调试（CDP）
 ```bash

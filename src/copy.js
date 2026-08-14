@@ -30,6 +30,12 @@ var MopaiCopy = (function () {
       });
     }
 
+    if (mode === 'github') {
+      return _uploadAll(html, token, notify, 'github').then(function (finalHtml) {
+        return _writeClipboard(finalHtml);
+      });
+    }
+
     // 本地模式（默认）：Python 处理 dataURI → localhost URL
     return window.pywebview.api.prepare_copy(html).then(function (res) {
       if (!res || !res.html) {
@@ -73,6 +79,10 @@ var MopaiCopy = (function () {
       return _uploadMarkdownImages(dataMd, token, notify).then(copyText);
     }
 
+    if (mode === 'github') {
+      return _uploadMarkdownImages(dataMd, token, notify, 'github').then(copyText);
+    }
+
     return window.pywebview.api.prepare_markdown(dataMd).then(function (res) {
       return copyText(res && res.markdown ? res.markdown : dataMd);
     });
@@ -91,8 +101,8 @@ var MopaiCopy = (function () {
     });
   }
 
-  // s.ee 模式：把 md 里的 dataURI 逐张上传并替换为公网 URL
-  function _uploadMarkdownImages(md, token, notify) {
+  // s.ee / GitHub 模式：把 md 里的 dataURI 逐张上传并替换为公网 URL
+  function _uploadMarkdownImages(md, token, notify, uploaderMode) {
     var uris = [];
     var re = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g;
     var m;
@@ -100,7 +110,7 @@ var MopaiCopy = (function () {
       if (uris.indexOf(m[0]) === -1) uris.push(m[0]);
     }
     if (uris.length === 0) return Promise.resolve(md);
-    if (!token) return Promise.reject(new Error('s.ee 模式需要 API Key（点 ⚙ 设置）'));
+    if (!token) return Promise.reject(new Error(_needTokenMsg(uploaderMode)));
 
     var done = 0;
     var chain = Promise.resolve();
@@ -112,7 +122,7 @@ var MopaiCopy = (function () {
           return;
         }
         notify('上传图片 ' + (done + 1) + '/' + uris.length + ' ...');
-        return window.pywebview.api.upload_image(uri, token).then(function (res) {
+        return _uploadOne(uri, token, uploaderMode).then(function (res) {
           done++;
           if (res && res.ok && res.url) {
             _urlCache[_fp(uri)] = res.url;
@@ -130,9 +140,23 @@ var MopaiCopy = (function () {
     return text.split(from).join(to);
   }
 
-  // ---- s.ee 模式：逐张上传 ----
+  // ---- s.ee / GitHub 模式：逐张上传 ----
 
-  function _uploadAll(html, token, notify) {
+  function _uploadOne(dataUri, token, uploaderMode) {
+    if (uploaderMode === 'github') {
+      var repo = (typeof MopaiState !== 'undefined') ? MopaiState.get('githubRepo') : '';
+      return window.pywebview.api.upload_image_github(dataUri, token, repo);
+    }
+    return window.pywebview.api.upload_image(dataUri, token);
+  }
+
+  function _needTokenMsg(uploaderMode) {
+    return uploaderMode === 'github'
+      ? 'GitHub 模式需要 Token 与仓库（点 ⚙ 设置）'
+      : 's.ee 模式需要 API Key（点 ⚙ 设置）';
+  }
+
+  function _uploadAll(html, token, notify, uploaderMode) {
     var div = document.createElement('div');
     div.innerHTML = html;
     var imgs = div.querySelectorAll('img');
@@ -155,7 +179,7 @@ var MopaiCopy = (function () {
     }
 
     if (!token) {
-      return Promise.reject(new Error('s.ee 模式需要 API Key（点 ⚙ 设置）'));
+      return Promise.reject(new Error(_needTokenMsg(uploaderMode)));
     }
 
     var done = 0;
@@ -169,7 +193,7 @@ var MopaiCopy = (function () {
           return;
         }
         notify('上传图片 ' + (done + 1) + '/' + tasks.length + ' ...');
-        return window.pywebview.api.upload_image(task.dataUri, token).then(function (res) {
+        return _uploadOne(task.dataUri, token, uploaderMode).then(function (res) {
           done++;
           if (res && res.ok && res.url) {
             _urlCache[_fp(task.dataUri)] = res.url;

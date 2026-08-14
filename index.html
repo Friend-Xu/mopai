@@ -223,16 +223,34 @@ body {
       <input type="radio" name="image-mode" value="local" checked>
       <div>
         <div class="mode-title">本地 HTTP（默认，免费）</div>
-        <div class="mode-desc">复制时启动本机临时服务提供图片，无需注册</div>
+        <div class="mode-desc">复制时启动本机临时服务提供图片，无需注册（仅微信编辑器可用）</div>
+      </div>
+    </label>
+    <label class="mode-option">
+      <input type="radio" name="image-mode" value="github">
+      <div>
+        <div class="mode-title">GitHub 图床（免费）</div>
+        <div class="mode-desc">图片存你的公开仓库，jsDelivr CDN 出公网链接（CSDN 等平台用）</div>
       </div>
     </label>
     <label class="mode-option">
       <input type="radio" name="image-mode" value="see">
       <div>
         <div class="mode-title">s.ee 图床</div>
-        <div class="mode-desc">上传到公共图床（需要 API Key）</div>
+        <div class="mode-desc">上传到公共图床（付费，需要 API Key）</div>
       </div>
     </label>
+  </div>
+  <div id="github-section" style="display:none">
+    <label class="settings-label">GitHub Token（<code>gh auth token</code> 获取）</label>
+    <input type="password" id="github-token-input" placeholder="ghp_...">
+    <label class="settings-label">仓库（格式 owner/repo，须为公开仓库）</label>
+    <input type="text" id="github-repo-input" placeholder="Friend-Xu/mopai-images">
+    <div class="settings-actions">
+      <button id="github-save" class="primary">保存</button>
+      <span id="github-status"></span>
+    </div>
+    <p class="settings-desc" style="margin-top:10px">未创建仓库？在 GitHub 新建一个公开空仓库（如 mopai-images），把名字填到上面即可。图片按内容指纹命名，同图只传一次。</p>
   </div>
   <div id="see-section" style="display:none">
     <label class="settings-label">s.ee API Key</label>

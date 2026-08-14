@@ -13,6 +13,8 @@ var MopaiState = (function () {
     codeThemeId: 'github-light',
     imageHostToken: '',
     imageMode: 'local',
+    githubToken: '',
+    githubRepo: '',
     folder: '',
     currentPath: '',
     lastSaved: null
@@ -39,6 +41,7 @@ var MopaiState = (function () {
         title: _state.title, markdown: _state.markdown,
         themeName: _state.themeName, codeThemeId: _state.codeThemeId,
         imageHostToken: _state.imageHostToken, imageMode: _state.imageMode,
+        githubToken: _state.githubToken, githubRepo: _state.githubRepo,
         folder: _state.folder, currentPath: _state.currentPath,
         lastSaved: _state.lastSaved
       }));
@@ -56,6 +59,8 @@ var MopaiState = (function () {
         _state.codeThemeId = data.codeThemeId || 'github-light';
         _state.imageHostToken = data.imageHostToken || '';
         _state.imageMode = data.imageMode || 'local';
+        _state.githubToken = data.githubToken || '';
+        _state.githubRepo = data.githubRepo || '';
         _state.folder = data.folder || '';
         _state.currentPath = data.currentPath || '';
         _state.lastSaved = data.lastSaved || null;

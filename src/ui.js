@@ -45,6 +45,10 @@ var MopaiUI = (function () {
     _els.tokenSave = document.getElementById("token-save");
     _els.tokenTest = document.getElementById("token-test");
     _els.tokenStatus = document.getElementById("token-status");
+    _els.githubTokenInput = document.getElementById("github-token-input");
+    _els.githubRepoInput = document.getElementById("github-repo-input");
+    _els.githubSave = document.getElementById("github-save");
+    _els.githubStatus = document.getElementById("github-status");
     _els.filePanel = document.getElementById("file-panel");
     _els.fileFolder = document.getElementById("file-folder");
     _els.fileList = document.getElementById("file-list");
@@ -64,6 +68,7 @@ var MopaiUI = (function () {
     _els.phoneScreen = document.getElementById("phone-screen");
     _els.refreshFilesBtn = document.getElementById("btn-refresh-files");
     _els.seeSection = document.getElementById("see-section");
+    _els.githubSection = document.getElementById("github-section");
     _els.editorPanel = document.getElementById("editor-panel");
   }
 
@@ -109,9 +114,10 @@ var MopaiUI = (function () {
     _els.copyBtn.addEventListener("click", function () {
       _els.copyBtn.disabled = true;
       var origText = _els.copyBtn.textContent;
+      var mode = MopaiState.get("imageMode") || "local";
       MopaiCopy.copyHTML(_generateOutput(), {
-        mode: MopaiState.get("imageMode") || "local",
-        token: MopaiState.get("imageHostToken") || "",
+        mode: mode,
+        token: _modeToken(mode),
         onProgress: function (msg) { if (msg) _els.copyBtn.textContent = msg; }
       }).then(function () {
         _toast("已复制到剪贴板，可直接粘贴到公众号编辑器");
@@ -160,7 +166,11 @@ var MopaiUI = (function () {
       _els.filePanel.style.display = "none";
       _els.fileBtn.classList.remove("active");
       _els.settingsPanel.style.display = isOpen ? "none" : "block";
-      if (!isOpen) _els.tokenInput.value = MopaiState.get("imageHostToken") || "";
+      if (!isOpen) {
+        _els.tokenInput.value = MopaiState.get("imageHostToken") || "";
+        _els.githubTokenInput.value = MopaiState.get("githubToken") || "";
+        _els.githubRepoInput.value = MopaiState.get("githubRepo") || "";
+      }
     });
     _els.settingsPanel.addEventListener("click", function (e) {
       e.stopPropagation();
@@ -168,6 +178,11 @@ var MopaiUI = (function () {
     _els.tokenSave.addEventListener("click", function () {
       MopaiState.set("imageHostToken", _els.tokenInput.value.trim());
       _tokenStatus("已保存", "ok");
+    });
+    _els.githubSave.addEventListener("click", function () {
+      MopaiState.set("githubToken", _els.githubTokenInput.value.trim());
+      MopaiState.set("githubRepo", _els.githubRepoInput.value.trim());
+      _githubStatus("已保存", "ok");
     });
     _els.tokenTest.addEventListener("click", function () {
       var token = _els.tokenInput.value.trim();
@@ -563,6 +578,17 @@ var MopaiUI = (function () {
     _els.tokenStatus.className = cls || "";
   }
 
+  function _githubStatus(msg, cls) {
+    if (!_els.githubStatus) return;
+    _els.githubStatus.textContent = msg;
+    _els.githubStatus.className = cls || "";
+  }
+
+  function _modeToken(mode) {
+    if (mode === "github") return MopaiState.get("githubToken") || "";
+    return MopaiState.get("imageHostToken") || "";
+  }
+
   function _isDesktop() {
     return typeof window.pywebview !== "undefined" &&
            window.pywebview.api &&
@@ -691,12 +717,14 @@ var MopaiUI = (function () {
     var mode = MopaiState.get("imageMode") || "local";
     MopaiCopy.copyMarkdown(_els.editor.value || "", {
       mode: mode,
-      token: MopaiState.get("imageHostToken") || "",
+      token: _modeToken(mode),
       onProgress: function (msg) { if (msg) _toast(msg); }
     }).then(function () {
       var tip = mode === "local"
-        ? "已复制 Markdown 源码（图片为临时本地链接，CSDN 建议在 ⚙ 切到 s.ee 模式）"
-        : "已复制 Markdown 源码（图片已替换为 s.ee 链接）";
+        ? "已复制 Markdown 源码（图片为临时本地链接，CSDN 请切到 GitHub 图床模式）"
+        : mode === "github"
+          ? "已复制 Markdown 源码（图片已上传你的 GitHub 仓库，jsDelivr 链接）"
+          : "已复制 Markdown 源码（图片已替换为 s.ee 链接）";
       _toast(tip);
     }).catch(function (err) {
       _toast(err && err.message ? err.message : "复制失败", true);
@@ -738,6 +766,9 @@ var MopaiUI = (function () {
   function _toggleSeeSection(mode) {
     if (_els.seeSection) {
       _els.seeSection.style.display = mode === "see" ? "block" : "none";
+    }
+    if (_els.githubSection) {
+      _els.githubSection.style.display = mode === "github" ? "block" : "none";
     }
   }
 

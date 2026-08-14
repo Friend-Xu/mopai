@@ -13,6 +13,7 @@ pywebview 窗口 + 暴露给前端的 Python API：
 """
 import base64
 import ctypes
+import hashlib
 import http.server
 import json
 import mimetypes
@@ -39,6 +40,7 @@ class Api:
         self._img_port = None
         self._tmp_dir = None
         self._batch_counter = 0
+        self._gh_branch_cache = {}
         self._start_image_server()
 
     # ---------- 本地 HTTP 图片服务 ----------
@@ -318,6 +320,75 @@ class Api:
             return {'ok': False, 'error': '图床 HTTP %d' % e.code}
         except Exception as e:
             return {'ok': False, 'error': str(e)}
+
+    # ---------- GitHub 图床（免费） ----------
+
+    def _get_default_branch(self, repo, token):
+        if repo in self._gh_branch_cache:
+            return self._gh_branch_cache[repo]
+        req = urllib.request.Request(
+            'https://api.github.com/repos/%s' % repo,
+            headers={'Authorization': 'Bearer %s' % token,
+                     'Accept': 'application/vnd.github+json',
+                     'User-Agent': 'Mopai/2.0'})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read().decode('utf-8'))
+        branch = data.get('default_branch', 'master')
+        self._gh_branch_cache[repo] = branch
+        return branch
+
+    def upload_image_github(self, data_uri, token, repo):
+        """上传单张图片到 GitHub 仓库，返回 jsDelivr CDN 链接 {ok, url}。
+        文件名取内容 SHA256 前 16 位 → 同图跨会话天然去重。
+        仓库必须公开（CSDN 服务器需要抓取）。"""
+        if not token or not repo:
+            return {'ok': False, 'error': '请先在 ⚙ 设置里配置 GitHub Token 与仓库'}
+        try:
+            b64 = data_uri.split(',', 1)[1] if ',' in data_uri else data_uri
+            raw = base64.b64decode(b64)
+            if len(raw) > MAX_IMAGE_BYTES:
+                return {'ok': False, 'error': '图片超过 5MB 限制'}
+            digest = hashlib.sha256(raw).hexdigest()[:16]
+            mime = 'image/png'
+            if data_uri.startswith('data:'):
+                mime = data_uri[5:].split(';')[0]
+            ext = self._MIME_EXT.get(mime, '.png')
+            path = 'images/%s/%s%s' % (time.strftime('%Y/%m/%d'), digest, ext)
+            headers = {
+                'Authorization': 'Bearer %s' % token,
+                'Accept': 'application/vnd.github+json',
+                'User-Agent': 'Mopai/2.0'
+            }
+            api = 'https://api.github.com/repos/%s/contents/%s' % (repo, path)
+            # 同图已存在：直接复用
+            try:
+                with urllib.request.urlopen(urllib.request.Request(api, headers=headers), timeout=15):
+                    pass
+                return {'ok': True, 'url': self._jsdelivr_url(repo, path, token)}
+            except urllib.error.HTTPError as e:
+                if e.code != 404:
+                    raise
+            body = json.dumps({'message': 'Mopai upload %s' % path, 'content': b64}).encode('utf-8')
+            req = urllib.request.Request(api, data=body, method='PUT', headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                if r.status not in (200, 201):
+                    return {'ok': False, 'error': 'GitHub 返回 %d' % r.status}
+            return {'ok': True, 'url': self._jsdelivr_url(repo, path, token)}
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                return {'ok': False, 'error': 'GitHub Token 无效，请检查 ⚙ 设置'}
+            if e.code == 404:
+                return {'ok': False, 'error': '仓库不存在或不是公开仓库：%s' % repo}
+            return {'ok': False, 'error': 'GitHub HTTP %d' % e.code}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
+    def _jsdelivr_url(self, repo, path, token):
+        try:
+            branch = self._get_default_branch(repo, token)
+        except Exception:
+            branch = 'master'
+        return 'https://cdn.jsdelivr.net/gh/%s@%s/%s' % (repo, branch, path)
 
     # ---------- 剪贴板（CF_HTML） ----------
 
