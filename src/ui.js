@@ -11,6 +11,7 @@ var MopaiUI = (function () {
   var _suppressSync = false;
   var _debounceTimer = null;
   var _dirty = false;
+  var _filesCache = []; // 当前文件夹的 md 文件列表（拖拽定位用）
 
   function init() {
     MopaiState.init();
@@ -184,14 +185,13 @@ var MopaiUI = (function () {
       var file = _els.fileInput.files[0];
       if (file) {
         MopaiFileIO.readFile(file, function (err, result) {
-          if (!err) { MopaiAssets.clear(); _loadContent(result.name, result.content); }
+          if (!err) _loadDroppedMd(result.name, result.content);
         });
       }
       _els.fileInput.value = "";
     });
     MopaiFileIO.init(_els.editor, function (filename, content) {
-      MopaiAssets.clear();
-      _loadContent(filename, content);
+      _loadDroppedMd(filename, content);
     });
 
     // ⑦ 键盘快捷键
@@ -233,6 +233,7 @@ var MopaiUI = (function () {
 
   function _setFolder(dir, files, currentPath) {
     MopaiState.update({ folder: dir || "", currentPath: currentPath || "" });
+    _filesCache = files || [];
     _renderFileList(files || [], currentPath);
   }
 
@@ -287,6 +288,50 @@ var MopaiUI = (function () {
       var abs = _absPath(MopaiState.get("folder"), el.getAttribute("data-rel"));
       el.classList.toggle("active", abs === normCur);
     });
+  }
+
+  // ---------- 拖拽/粘贴 md：按文件名在已打开文件夹中定位 ----------
+  // 浏览器拖拽拿不到文件完整路径，无法解析相对路径图片；
+  // 用文件名匹配已打开文件夹的 md 列表，命中则走 read_file 完整加载（含图片）。
+
+  function _loadDroppedMd(name, content) {
+    if (!_isDesktop()) { MopaiAssets.clear(); _loadContent(name, content); return; }
+    if (_dirty && !confirm("当前文章有未保存的修改，确定切换吗？（Ctrl+S 可先保存）")) return;
+    var dir = MopaiState.get("folder");
+    if (!dir) { _fallbackContent(name, content); return; }
+
+    var doMatch = function () {
+      var match = null;
+      for (var i = 0; i < _filesCache.length; i++) {
+        if (_filesCache[i].split("/").pop() === name) { match = _filesCache[i]; break; }
+      }
+      if (!match) { _fallbackContent(name, content); return; }
+      window.pywebview.api.read_file(_absPath(dir, match)).then(function (res) {
+        if (!res || res.error) { _fallbackContent(name, content); return; }
+        _dirty = false;
+        MopaiAssets.setMap(res.images || {});
+        MopaiState.update({ currentPath: res.path, title: res.name, markdown: res.content });
+        _els.editor.value = res.content;
+        _els.filename.textContent = res.name;
+        document.title = res.name + " — 墨排 Mopai";
+        _updatePreview();
+        _updateCharCount();
+        _renderFileListActive(res.path);
+        _toast("已加载 " + res.name + "，识别 " + Object.keys(res.images || {}).length + " 张图片");
+      }).catch(function () { _fallbackContent(name, content); });
+    };
+
+    if (_filesCache.length) { doMatch(); return; }
+    window.pywebview.api.open_folder(dir).then(function (r) {
+      if (r && !r.error) _filesCache = r.files || [];
+      doMatch();
+    }).catch(function () { _fallbackContent(name, content); });
+  }
+
+  function _fallbackContent(name, content) {
+    MopaiAssets.clear();
+    _loadContent(name, content);
+    _toast("未在已打开文件夹中找到该文件，相对路径图片无法显示，请用 📂 打开文件", true);
   }
 
   // ---------- 下拉菜单 ----------
@@ -666,7 +711,8 @@ var MopaiUI = (function () {
     if (!_isDesktop()) return;
     window.pywebview.api.open_folder(dir).then(function (res) {
       if (!res || res.error) { _toast((res && res.error) || "刷新失败", true); return; }
-      _renderFileList(res.files || [], MopaiState.get("currentPath"));
+      _filesCache = res.files || [];
+      _renderFileList(_filesCache, MopaiState.get("currentPath"));
       _toast("文件列表已刷新");
     });
   }
