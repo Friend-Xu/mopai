@@ -61,8 +61,8 @@ hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
 
 ## 图床（三模式，⚙ 设置面板切换）
 - **本地 HTTP（默认，仅微信）**：Python 把 dataURI 写临时文件 + 127.0.0.1 随机端口 HTTP 服务；微信粘贴时**浏览器端**抓图上传微信 CDN。CSDN 是**服务端**抓图，访问不到 localhost，不可用
-- **GitHub 图床（免费，CSDN 用）**：`PUT https://api.github.com/repos/{repo}/contents/{path}`，文件名 = 图片内容 SHA256 前 16 位（同图跨会话去重），返回 `https://cdn.jsdelivr.net/gh/{repo}@{default_branch}/{path}`。仓库须公开。用户仓库：Friend-Xu/mopai-images
-- **s.ee（付费备选）**：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`。用户在 ⚙ 设置面板填 Key（存 localStorage），面板带 1px 测试图连通性验证
+- **GitHub 图床（免费，国内受限）**：`PUT https://api.github.com/repos/{repo}/contents/{path}`，文件名 = SHA256 前 16 位（同图去重），返回 jsDelivr URL。**注意：jsDelivr 已停止代理 GitHub（301 → raw.githubusercontent.com），国内网络 raw 不通 → CSDN 转存失败**。仅适合海外网络/备份。用户仓库：Friend-Xu/mopai-images
+- **s.ee（有免费版，CSDN 推荐）**：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`。免费计划：5GB 容量、每天 200 次上传。用户在 ⚙ 设置面板填 Key（存 localStorage），面板带 1px 测试图连通性验证
 
 ## 调试（CDP）
 ```bash
