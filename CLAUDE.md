@@ -23,6 +23,7 @@ test/cdp_eval.py     ← CDP 调试工具（见下文"调试"）
 | `pick_images()` | 原生多选图片对话框 |
 | `upload_image(dataUri, token)` | 上传到 s.ee 图床（原 SM.MS 兼容 API），返回 `{ok, url}` |
 | `upload_image_github(dataUri, token, repo)` | 上传到 GitHub 仓库（SHA256 指纹文件名去重），返回 jsDelivr CDN URL `{ok, url}` |
+| `upload_image_cos(dataUri, secretId, secretKey, bucket, region)` | 上传到腾讯云 COS（V5 HMAC 签名，纯标准库），SHA256 文件名幂等覆盖，返回公网直链 `{ok, url}` |
 | `copy_html(html)` | CF_HTML + CF_UNICODETEXT 双格式写剪贴板 |
 
 **Win32 ctypes 注意**：所有句柄/指针函数必须声明 `restype/argtypes`（见 `_setup_win32()`），否则 64 位下指针截断导致 access violation。
@@ -59,10 +60,11 @@ hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
 - **5 套墨排主题**（wechat-theme.js）：墨排·Pro/极简/暖读/杂志/禅意（wechat 模式：表格包裹保背景 + 宽表全转卡片）
 - **5 套代码配色**：VS Code Dark+/Light+、GitHub、Monokai、Solarized Light（hljs token → 内联色值映射）
 
-## 图床（三模式，⚙ 设置面板切换）
+## 图床（四模式，⚙ 设置面板切换）
 - **本地 HTTP（默认，仅微信）**：Python 把 dataURI 写临时文件 + 127.0.0.1 随机端口 HTTP 服务；微信粘贴时**浏览器端**抓图上传微信 CDN。CSDN 是**服务端**抓图，访问不到 localhost，不可用
-- **GitHub 图床（免费，国内受限）**：`PUT https://api.github.com/repos/{repo}/contents/{path}`，文件名 = SHA256 前 16 位（同图去重），返回 jsDelivr URL。**注意：jsDelivr 已停止代理 GitHub（301 → raw.githubusercontent.com），国内网络 raw 不通 → CSDN 转存失败**。仅适合海外网络/备份。用户仓库：Friend-Xu/mopai-images
-- **s.ee（有免费版，CSDN 推荐）**：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`。免费计划：5GB 容量、每天 200 次上传。用户在 ⚙ 设置面板填 Key（存 localStorage），面板带 1px 测试图连通性验证
+- **腾讯云 COS（CSDN 推荐）**：PUT Object + V5 签名（q-sign-algorithm=sha1，host 参与签名），桶需「公有读私有写」；文件名 = SHA256 前 16 位（同名覆盖幂等）；URL `https://{bucket}.cos.{region}.myqcloud.com/{key}`
+- **GitHub 图床（免费，国内受限）**：`PUT https://api.github.com/repos/{repo}/contents/{path}`，SHA256 文件名去重，返回 jsDelivr URL。**jsDelivr 已停止代理 GitHub（301 → raw.githubusercontent.com），国内 raw 不通 → CSDN 转存失败**。仅适合海外/备份。用户仓库：Friend-Xu/mopai-images
+- **s.ee（无免费档，不推荐新用户）**：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`
 
 ## 调试（CDP）
 ```bash

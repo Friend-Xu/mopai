@@ -36,6 +36,12 @@ var MopaiCopy = (function () {
       });
     }
 
+    if (mode === 'cos') {
+      return _uploadAll(html, token, notify, 'cos').then(function (finalHtml) {
+        return _writeClipboard(finalHtml);
+      });
+    }
+
     // 本地模式（默认）：Python 处理 dataURI → localhost URL
     return window.pywebview.api.prepare_copy(html).then(function (res) {
       if (!res || !res.html) {
@@ -81,6 +87,10 @@ var MopaiCopy = (function () {
 
     if (mode === 'github') {
       return _uploadMarkdownImages(dataMd, token, notify, 'github').then(copyText);
+    }
+
+    if (mode === 'cos') {
+      return _uploadMarkdownImages(dataMd, token, notify, 'cos').then(copyText);
     }
 
     return window.pywebview.api.prepare_markdown(dataMd).then(function (res) {
@@ -154,20 +164,30 @@ var MopaiCopy = (function () {
     return text.split(from).join(to);
   }
 
-  // ---- s.ee / GitHub 模式：逐张上传 ----
+  // ---- s.ee / GitHub / COS 模式：逐张上传 ----
 
   function _uploadOne(dataUri, token, uploaderMode) {
     if (uploaderMode === 'github') {
       var repo = (typeof MopaiState !== 'undefined') ? MopaiState.get('githubRepo') : '';
       return window.pywebview.api.upload_image_github(dataUri, token, repo);
     }
+    if (uploaderMode === 'cos') {
+      var st = (typeof MopaiState !== 'undefined') ? MopaiState : { get: function () { return ''; } };
+      return window.pywebview.api.upload_image_cos(
+        dataUri, st.get('cosSecretId'), st.get('cosSecretKey'),
+        st.get('cosBucket'), st.get('cosRegion'));
+    }
     return window.pywebview.api.upload_image(dataUri, token);
   }
 
   function _needTokenMsg(uploaderMode) {
-    return uploaderMode === 'github'
-      ? 'GitHub 模式需要 Token 与仓库（点 ⚙ 设置）'
-      : 's.ee 模式需要 API Key（点 ⚙ 设置）';
+    if (uploaderMode === 'github') {
+      return 'GitHub 模式需要 Token 与仓库（点 ⚙ 设置）';
+    }
+    if (uploaderMode === 'cos') {
+      return 'COS 模式需要密钥与存储桶（点 ⚙ 设置）';
+    }
+    return 's.ee 模式需要 API Key（点 ⚙ 设置）';
   }
 
   function _uploadAll(html, token, notify, uploaderMode) {

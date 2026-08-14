@@ -15,6 +15,10 @@ var MopaiState = (function () {
     imageMode: 'local',
     githubToken: '',
     githubRepo: '',
+    cosSecretId: '',
+    cosSecretKey: '',
+    cosBucket: '',
+    cosRegion: '',
     folder: '',
     currentPath: '',
     lastSaved: null
@@ -42,6 +46,8 @@ var MopaiState = (function () {
         themeName: _state.themeName, codeThemeId: _state.codeThemeId,
         imageHostToken: _state.imageHostToken, imageMode: _state.imageMode,
         githubToken: _state.githubToken, githubRepo: _state.githubRepo,
+        cosSecretId: _state.cosSecretId, cosSecretKey: _state.cosSecretKey,
+        cosBucket: _state.cosBucket, cosRegion: _state.cosRegion,
         folder: _state.folder, currentPath: _state.currentPath,
         lastSaved: _state.lastSaved
       }));
@@ -61,6 +67,10 @@ var MopaiState = (function () {
         _state.imageMode = data.imageMode || 'local';
         _state.githubToken = data.githubToken || '';
         _state.githubRepo = data.githubRepo || '';
+        _state.cosSecretId = data.cosSecretId || '';
+        _state.cosSecretKey = data.cosSecretKey || '';
+        _state.cosBucket = data.cosBucket || '';
+        _state.cosRegion = data.cosRegion || '';
         _state.folder = data.folder || '';
         _state.currentPath = data.currentPath || '';
         _state.lastSaved = data.lastSaved || null;

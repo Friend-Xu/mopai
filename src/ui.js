@@ -49,6 +49,12 @@ var MopaiUI = (function () {
     _els.githubRepoInput = document.getElementById("github-repo-input");
     _els.githubSave = document.getElementById("github-save");
     _els.githubStatus = document.getElementById("github-status");
+    _els.cosSecretIdInput = document.getElementById("cos-secret-id-input");
+    _els.cosSecretKeyInput = document.getElementById("cos-secret-key-input");
+    _els.cosBucketInput = document.getElementById("cos-bucket-input");
+    _els.cosRegionInput = document.getElementById("cos-region-input");
+    _els.cosSave = document.getElementById("cos-save");
+    _els.cosStatus = document.getElementById("cos-status");
     _els.filePanel = document.getElementById("file-panel");
     _els.fileFolder = document.getElementById("file-folder");
     _els.fileList = document.getElementById("file-list");
@@ -69,6 +75,7 @@ var MopaiUI = (function () {
     _els.refreshFilesBtn = document.getElementById("btn-refresh-files");
     _els.seeSection = document.getElementById("see-section");
     _els.githubSection = document.getElementById("github-section");
+    _els.cosSection = document.getElementById("cos-section");
     _els.uploadOverlay = document.getElementById("upload-overlay");
     _els.uploadBarFill = document.getElementById("upload-bar-fill");
     _els.uploadCount = document.getElementById("upload-count");
@@ -118,7 +125,7 @@ var MopaiUI = (function () {
       _els.copyBtn.disabled = true;
       var origText = _els.copyBtn.textContent;
       var mode = MopaiState.get("imageMode") || "local";
-      if (mode === "github" || mode === "see") _showUploadOverlay();
+      if (mode === "github" || mode === "see" || mode === "cos") _showUploadOverlay();
       MopaiCopy.copyHTML(_generateOutput(), {
         mode: mode,
         token: _modeToken(mode),
@@ -181,6 +188,10 @@ var MopaiUI = (function () {
         _els.tokenInput.value = MopaiState.get("imageHostToken") || "";
         _els.githubTokenInput.value = MopaiState.get("githubToken") || "";
         _els.githubRepoInput.value = MopaiState.get("githubRepo") || "";
+        _els.cosSecretIdInput.value = MopaiState.get("cosSecretId") || "";
+        _els.cosSecretKeyInput.value = MopaiState.get("cosSecretKey") || "";
+        _els.cosBucketInput.value = MopaiState.get("cosBucket") || "";
+        _els.cosRegionInput.value = MopaiState.get("cosRegion") || "";
       }
     });
     _els.settingsPanel.addEventListener("click", function (e) {
@@ -194,6 +205,13 @@ var MopaiUI = (function () {
       MopaiState.set("githubToken", _els.githubTokenInput.value.trim());
       MopaiState.set("githubRepo", _els.githubRepoInput.value.trim());
       _githubStatus("已保存", "ok");
+    });
+    _els.cosSave.addEventListener("click", function () {
+      MopaiState.set("cosSecretId", _els.cosSecretIdInput.value.trim());
+      MopaiState.set("cosSecretKey", _els.cosSecretKeyInput.value.trim());
+      MopaiState.set("cosBucket", _els.cosBucketInput.value.trim());
+      MopaiState.set("cosRegion", _els.cosRegionInput.value.trim());
+      _cosStatus("已保存", "ok");
     });
     _els.tokenTest.addEventListener("click", function () {
       var token = _els.tokenInput.value.trim();
@@ -595,8 +613,15 @@ var MopaiUI = (function () {
     _els.githubStatus.className = cls || "";
   }
 
+  function _cosStatus(msg, cls) {
+    if (!_els.cosStatus) return;
+    _els.cosStatus.textContent = msg;
+    _els.cosStatus.className = cls || "";
+  }
+
   function _modeToken(mode) {
     if (mode === "github") return MopaiState.get("githubToken") || "";
+    if (mode === "cos") return MopaiState.get("cosSecretId") || "";
     return MopaiState.get("imageHostToken") || "";
   }
 
@@ -737,10 +762,12 @@ var MopaiUI = (function () {
       }
     }).then(function () {
       var tip = mode === "local"
-        ? "已复制 Markdown 源码（图片为临时本地链接，CSDN 请切到 GitHub 图床模式）"
+        ? "已复制 Markdown 源码（图片为临时本地链接，CSDN 请切到 COS 或 s.ee 模式）"
         : mode === "github"
-          ? "已复制 Markdown 源码（图片已上传你的 GitHub 仓库，jsDelivr 链接）"
-          : "已复制 Markdown 源码（图片已替换为 s.ee 链接）";
+          ? "已复制 Markdown 源码（图片已上传你的 GitHub 仓库）"
+          : mode === "cos"
+            ? "已复制 Markdown 源码（图片已上传腾讯云 COS）"
+            : "已复制 Markdown 源码（图片已替换为 s.ee 链接）";
       _finishUploadOverlay();
       _toast(tip);
     }).catch(function (err) {
@@ -817,6 +844,9 @@ var MopaiUI = (function () {
     }
     if (_els.githubSection) {
       _els.githubSection.style.display = mode === "github" ? "block" : "none";
+    }
+    if (_els.cosSection) {
+      _els.cosSection.style.display = mode === "cos" ? "block" : "none";
     }
   }
 

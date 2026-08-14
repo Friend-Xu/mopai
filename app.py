@@ -14,6 +14,7 @@ pywebview 窗口 + 暴露给前端的 Python API：
 import base64
 import ctypes
 import hashlib
+import hmac
 import http.server
 import json
 import mimetypes
@@ -403,6 +404,59 @@ class Api:
                 if i == tries - 1:
                     raise
                 time.sleep(1.5 * (i + 1))
+
+    # ---------- 腾讯云 COS 图床 ----------
+
+    def upload_image_cos(self, data_uri, secret_id, secret_key, bucket, region):
+        """上传到腾讯云 COS（V5 签名，纯标准库实现），返回 {ok, url}。
+        文件名取内容 SHA256 前 16 位 → 同名 PUT 覆盖，天然幂等去重。
+        桶需设为「公有读私有写」才能外链访问。"""
+        if not (secret_id and secret_key and bucket and region):
+            return {'ok': False, 'error': '请先在 ⚙ 设置里配置 COS 密钥与存储桶'}
+        try:
+            b64 = data_uri.split(',', 1)[1] if ',' in data_uri else data_uri
+            raw = base64.b64decode(b64)
+            if len(raw) > MAX_IMAGE_BYTES:
+                return {'ok': False, 'error': '图片超过 5MB 限制'}
+            digest = hashlib.sha256(raw).hexdigest()[:16]
+            mime = 'image/png'
+            if data_uri.startswith('data:'):
+                mime = data_uri[5:].split(';')[0]
+            ext = self._MIME_EXT.get(mime, '.png')
+            key = 'mopai/%s/%s%s' % (time.strftime('%Y/%m/%d'), digest, ext)
+            host = '%s.cos.%s.myqcloud.com' % (bucket, region)
+            url = 'https://%s/%s' % (host, urllib.parse.quote(key))
+
+            now = int(time.time())
+            key_time = '%d;%d' % (now - 60, now + 3600)
+            sign_key = hmac.new(secret_key.encode('utf-8'), key_time.encode('utf-8'),
+                                hashlib.sha1).hexdigest()
+            http_string = 'put\n/%s\n\nhost=%s\n' % (key, host)
+            string_to_sign = 'sha1\n%s\n%s\n' % (
+                key_time, hashlib.sha1(http_string.encode('utf-8')).hexdigest())
+            signature = hmac.new(sign_key.encode('utf-8'), string_to_sign.encode('utf-8'),
+                                 hashlib.sha1).hexdigest()
+            auth = ('q-sign-algorithm=sha1&q-ak=%s&q-sign-time=%s&q-key-time=%s'
+                    '&q-header-list=host&q-url-param-list=&q-signature=%s'
+                    % (secret_id, key_time, key_time, signature))
+
+            req = urllib.request.Request(url, data=raw, method='PUT', headers={
+                'Authorization': auth,
+                'Content-Type': mime,
+                'Content-Length': str(len(raw)),
+                'User-Agent': 'Mopai/2.0'})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                if r.status not in (200, 204):
+                    return {'ok': False, 'error': 'COS 返回 %d' % r.status}
+            return {'ok': True, 'url': url}
+        except urllib.error.HTTPError as e:
+            if e.code == 403:
+                return {'ok': False, 'error': 'COS 403：密钥无效或没有该存储桶的写入权限'}
+            if e.code == 404:
+                return {'ok': False, 'error': 'COS 404：存储桶不存在（检查桶名和地域）'}
+            return {'ok': False, 'error': 'COS HTTP %d' % e.code}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
 
     # ---------- 剪贴板（CF_HTML） ----------
 

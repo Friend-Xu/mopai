@@ -249,6 +249,13 @@ body {
       </div>
     </label>
     <label class="mode-option">
+      <input type="radio" name="image-mode" value="cos">
+      <div>
+        <div class="mode-title">腾讯云 COS（推荐，CSDN 最稳）</div>
+        <div class="mode-desc">国内机房公网直链，CSDN 转存 100% 成功；新用户 6 个月免费</div>
+      </div>
+    </label>
+    <label class="mode-option">
       <input type="radio" name="image-mode" value="github">
       <div>
         <div class="mode-title">GitHub 图床（免费）</div>
@@ -262,6 +269,21 @@ body {
         <div class="mode-desc">注册 s.ee 免费拿 API Key，公网直链国内可访问</div>
       </div>
     </label>
+  </div>
+  <div id="cos-section" style="display:none">
+    <label class="settings-label">SecretId</label>
+    <input type="text" id="cos-secret-id-input" placeholder="AKID...">
+    <label class="settings-label">SecretKey</label>
+    <input type="password" id="cos-secret-key-input" placeholder="密钥，仅显示一次">
+    <label class="settings-label">存储桶（含 APPID 后缀）</label>
+    <input type="text" id="cos-bucket-input" placeholder="mopai-blog-1250000000">
+    <label class="settings-label">地域</label>
+    <input type="text" id="cos-region-input" placeholder="ap-guangzhou">
+    <div class="settings-actions">
+      <button id="cos-save" class="primary">保存</button>
+      <span id="cos-status"></span>
+    </div>
+    <p class="settings-desc" style="margin-top:10px">存储桶权限需为「公有读私有写」。密钥在腾讯云控制台 CAM 页面创建。图片按内容指纹命名，同图只传一次。</p>
   </div>
   <div id="github-section" style="display:none">
     <label class="settings-label">GitHub Token（<code>gh auth token</code> 获取）</label>
