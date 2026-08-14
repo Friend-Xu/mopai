@@ -50,6 +50,8 @@ hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
 2. **标题招牌设计靠 `h2Content`/`h3Content`** —— engine `_walk` 会把标题文字包一层 `<span>` 套用该样式（马克笔下划线 `linear-gradient(#fff 60%, 主色 40%)`、标签页等技法）
 3. **图片永不立即上传** —— 粘贴/拖入/文件夹图片统一注册到 MopaiAssets，「复制」时批量上传并替换 URL（同图去重，见 copy.js `_urlCache`）
 4. **背景色只在 table/td 上可靠** —— 微信模式用 `wrapForWechat()` 表格包裹保留底色
+5. **pywebview 桥注入晚于页面脚本**（实测 DOMContentLoaded 后 ~11ms）—— init 里 `window.pywebview` 尚不存在，任何启动期 API 调用必须轮询 `_isDesktop()` 等待桥就绪（见 ui.js `_restoreFolder`）
+6. **Python 异常 = Promise reject** —— pywebview API 调用中 Python 抛异常（如 FileNotFoundError）会让 JS Promise reject 而非 resolve `{error}`，`.then` 静默不执行；所有 API 调用必须带 `.catch`
 
 ## 主题体系（11 套）
 - **6 套招牌主题**（themes.js）：山吹（琥珀马克笔）、橙心（珊瑚标签页）、极客黑（黑标签页+珊瑚）、蔷薇紫、萌绿、兰青 —— 设计参考 mdnice 经典主题
