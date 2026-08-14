@@ -69,6 +69,9 @@ var MopaiUI = (function () {
     _els.refreshFilesBtn = document.getElementById("btn-refresh-files");
     _els.seeSection = document.getElementById("see-section");
     _els.githubSection = document.getElementById("github-section");
+    _els.uploadOverlay = document.getElementById("upload-overlay");
+    _els.uploadBarFill = document.getElementById("upload-bar-fill");
+    _els.uploadCount = document.getElementById("upload-count");
     _els.editorPanel = document.getElementById("editor-panel");
   }
 
@@ -115,13 +118,20 @@ var MopaiUI = (function () {
       _els.copyBtn.disabled = true;
       var origText = _els.copyBtn.textContent;
       var mode = MopaiState.get("imageMode") || "local";
+      if (mode === "github" || mode === "see") _showUploadOverlay();
       MopaiCopy.copyHTML(_generateOutput(), {
         mode: mode,
         token: _modeToken(mode),
-        onProgress: function (msg) { if (msg) _els.copyBtn.textContent = msg; }
+        onProgress: function (info) {
+          if (!info) return;
+          _updateUploadOverlay(info.done, info.total);
+          _els.copyBtn.textContent = "上传图片 " + info.done + "/" + info.total + " ...";
+        }
       }).then(function () {
+        _finishUploadOverlay();
         _toast("已复制到剪贴板，可直接粘贴到公众号编辑器");
       }).catch(function (err) {
+        _hideUploadOverlay();
         _toast(err && err.message ? err.message : "复制失败，请手动选择预览区内容复制", true);
       }).finally(function () {
         _els.copyBtn.disabled = false;
@@ -715,20 +725,56 @@ var MopaiUI = (function () {
 
   function _copyMarkdownSource() {
     var mode = MopaiState.get("imageMode") || "local";
+    if (mode === "github" || mode === "see") _showUploadOverlay();
     MopaiCopy.copyMarkdown(_els.editor.value || "", {
       mode: mode,
       token: _modeToken(mode),
-      onProgress: function (msg) { if (msg) _toast(msg); }
+      onProgress: function (info) {
+        if (!info) return;
+        _updateUploadOverlay(info.done, info.total);
+      }
     }).then(function () {
       var tip = mode === "local"
         ? "已复制 Markdown 源码（图片为临时本地链接，CSDN 请切到 GitHub 图床模式）"
         : mode === "github"
           ? "已复制 Markdown 源码（图片已上传你的 GitHub 仓库，jsDelivr 链接）"
           : "已复制 Markdown 源码（图片已替换为 s.ee 链接）";
+      _finishUploadOverlay();
       _toast(tip);
     }).catch(function (err) {
+      _hideUploadOverlay();
       _toast(err && err.message ? err.message : "复制失败", true);
     });
+  }
+
+  // ---------- 上传进度蒙版 ----------
+
+  function _showUploadOverlay() {
+    if (!_els.uploadOverlay) return;
+    _els.uploadBarFill.style.width = "0";
+    _els.uploadCount.textContent = "准备中...";
+    _els.uploadCount.classList.remove("ok");
+    _els.uploadOverlay.classList.add("show");
+  }
+
+  function _updateUploadOverlay(done, total) {
+    if (!_els.uploadOverlay) return;
+    var pct = total > 0 ? Math.round(done / total * 100) : 0;
+    _els.uploadBarFill.style.width = pct + "%";
+    _els.uploadCount.textContent = done + " / " + total + "（" + pct + "%）";
+  }
+
+  function _finishUploadOverlay() {
+    if (!_els.uploadOverlay || !_els.uploadOverlay.classList.contains("show")) return;
+    _els.uploadBarFill.style.width = "100%";
+    _els.uploadCount.textContent = "✓ 上传完成，正在复制...";
+    _els.uploadCount.classList.add("ok");
+    setTimeout(_hideUploadOverlay, 600);
+  }
+
+  function _hideUploadOverlay() {
+    if (!_els.uploadOverlay) return;
+    _els.uploadOverlay.classList.remove("show");
   }
 
   // ---------- F 文件栏刷新 ----------

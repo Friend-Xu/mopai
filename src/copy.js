@@ -121,7 +121,7 @@ var MopaiCopy = (function () {
           done++;
           return;
         }
-        notify('上传图片 ' + (done + 1) + '/' + uris.length + ' ...');
+        notify({ done: done + 1, total: uris.length });
         return _uploadOne(uri, token, uploaderMode).then(function (res) {
           done++;
           if (res && res.ok && res.url) {
@@ -133,7 +133,7 @@ var MopaiCopy = (function () {
         });
       });
     });
-    return chain.then(function () { notify(''); return md; });
+    return chain.then(function () { notify(null); return md; });
   }
 
   function _replaceInText(text, from, to) {
@@ -192,7 +192,7 @@ var MopaiCopy = (function () {
           done++;
           return;
         }
-        notify('上传图片 ' + (done + 1) + '/' + tasks.length + ' ...');
+        notify({ done: done + 1, total: tasks.length });
         return _uploadOne(task.dataUri, token, uploaderMode).then(function (res) {
           done++;
           if (res && res.ok && res.url) {
@@ -206,7 +206,7 @@ var MopaiCopy = (function () {
     });
 
     return chain.then(function () {
-      notify('');
+      notify(null);
       return div.innerHTML;
     });
 

@@ -181,6 +181,28 @@ body {
   position: absolute; left: 0; right: 0; background: rgba(255, 177, 27, 0.25);
   pointer-events: none; transition: opacity 0.3s; z-index: 5;
 }
+/* ---- Upload overlay (image upload progress) ---- */
+.upload-overlay {
+  display: none; position: fixed; inset: 0; z-index: 300;
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  align-items: center; justify-content: center;
+}
+.upload-overlay.show { display: flex; }
+.upload-card {
+  width: 320px; background: #fff; border-radius: 12px; padding: 26px 24px 22px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25); text-align: center;
+}
+.upload-card h4 { font-size: 15px; margin-bottom: 6px; color: #333; }
+.upload-card .upload-sub { font-size: 12px; color: #999; margin-bottom: 18px; }
+.upload-bar { height: 6px; background: #eef1f5; border-radius: 3px; overflow: hidden; margin-bottom: 10px; }
+.upload-bar-fill {
+  height: 100%; width: 0; border-radius: 3px;
+  background: linear-gradient(90deg, #3a7bd5, #5b9cf5);
+  transition: width 0.3s ease;
+}
+.upload-count { font-size: 13px; color: #555; font-weight: 500; }
+.upload-count.ok { color: #35b378; }
 </style>
 </head>
 <body>
@@ -297,6 +319,15 @@ body {
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div class="upload-overlay" id="upload-overlay">
+  <div class="upload-card">
+    <h4>正在上传图片</h4>
+    <div class="upload-sub">上传完成后自动复制到剪贴板</div>
+    <div class="upload-bar"><div class="upload-bar-fill" id="upload-bar-fill"></div></div>
+    <div class="upload-count" id="upload-count">准备中...</div>
+  </div>
+</div>
 
 <script src="lib/highlight.min.js"></script>
 <script src="lib/markdown-it.min.js"></script>
