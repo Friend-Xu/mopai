@@ -23,6 +23,7 @@ import socket
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 
 import webview
@@ -143,36 +144,47 @@ class Api:
 
     # ---------- 文件 / 文件夹 ----------
 
-    def _scan_images(self, base_dir, md_dirs=None):
-        """递归扫描目录图片为 {相对路径: dataURI}，超 5MB 记入 skipped。
-        md_dirs: 额外为图片注册相对这些目录的键（md 在子目录时，
-        图片引用是相对 md 所在目录的，需要两种键都能命中）"""
+    _MD_IMG_RE = re.compile(
+        r'!\[[^\]]*\]\(<([^>]+)>\)'      # ![alt](<path>)
+        r'|!\[[^\]]*\]\(([^)\s]+)\)'     # ![alt](path)
+        r'|<img[^>]+src=["\']([^"\']+)["\']',  # <img src="path">
+        re.IGNORECASE
+    )
+
+    def _resolve_md_images(self, md_path, content):
+        """引用驱动：解析 md 里的图片引用，只加载实际引用的本地图片。
+        相对路径以 md 所在目录为基准（支持 ../ 与绝对路径）。
+        返回 ({引用: dataURI}, skipped)"""
+        md_dir = os.path.dirname(os.path.abspath(md_path))
         images = {}
         skipped = []
-        for root, _dirs, files in os.walk(base_dir):
-            for fn in files:
-                ext = os.path.splitext(fn)[1].lower()
-                if ext not in IMAGE_EXTS:
-                    continue
-                full = os.path.join(root, fn)
-                size = os.path.getsize(full)
-                rel = os.path.relpath(full, base_dir).replace('\\', '/')
-                if size > MAX_IMAGE_BYTES:
-                    skipped.append(rel)
-                    continue
-                with open(full, 'rb') as f:
-                    b64 = base64.b64encode(f.read()).decode('ascii')
-                mime = mimetypes.guess_type(fn)[0] or 'image/png'
-                uri = 'data:%s;base64,%s' % (mime, b64)
-                images[rel] = uri
-                if md_dirs:
-                    for d in md_dirs:
-                        try:
-                            rel2 = os.path.relpath(full, d).replace('\\', '/')
-                        except ValueError:
-                            continue
-                        if not rel2.startswith('..'):
-                            images.setdefault(rel2, uri)
+
+        refs = []
+        for m in self._MD_IMG_RE.finditer(content):
+            ref = m.group(1) or m.group(2) or m.group(3)
+            if ref and ref not in refs:
+                refs.append(ref)
+
+        for ref in refs:
+            if ref.startswith(('data:', 'http://', 'https://', '//', '#')):
+                continue
+            rel = ref.split('#')[0].split('?')[0]
+            try:
+                rel = urllib.parse.unquote(rel)
+            except Exception:
+                pass
+            full = os.path.normpath(os.path.join(md_dir, rel))
+            if not os.path.isfile(full):
+                skipped.append(ref)
+                continue
+            size = os.path.getsize(full)
+            if size > MAX_IMAGE_BYTES:
+                skipped.append(ref)
+                continue
+            with open(full, 'rb') as f:
+                b64 = base64.b64encode(f.read()).decode('ascii')
+            mime = mimetypes.guess_type(full)[0] or 'image/png'
+            images[ref] = 'data:%s;base64,%s' % (mime, b64)
         return images, skipped
 
     def _list_md(self, base_dir):
@@ -186,18 +198,12 @@ class Api:
         return sorted(out)
 
     def _load_article(self, md_path, base_dir=None):
-        """读 md + 扫描 base 目录图片 + 列出 base 目录内 md。base 默认为 md 所在目录"""
+        """读 md + 解析图片引用 + 列出 base 目录内 md。base 默认为 md 所在目录"""
         md_path = os.path.abspath(md_path)
         base = os.path.abspath(base_dir) if base_dir else os.path.dirname(md_path)
         with open(md_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        # 收集所有 md 所在目录：图片引用相对这些目录的键也要注册
-        md_dirs = [os.path.dirname(md_path)]
-        for rel in self._list_md(base):
-            d = os.path.dirname(os.path.abspath(os.path.join(base, rel)))
-            if d not in md_dirs:
-                md_dirs.append(d)
-        images, skipped = self._scan_images(base, md_dirs)
+        images, skipped = self._resolve_md_images(md_path, content)
         return {
             'name': os.path.basename(md_path),
             'path': md_path,
@@ -235,12 +241,13 @@ class Api:
         return self._load_article(os.path.join(path, mds[0]), base_dir=path)
 
     def read_file(self, path):
-        """轻量读取单个 md 内容（文件栏切换用，不重扫图片，沿用已加载映射）"""
+        """读取单个 md 内容 + 解析该文的图片引用（文件栏切换用）"""
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 content = f.read()
+            images, skipped = self._resolve_md_images(path, content)
             return {'name': os.path.basename(path), 'path': os.path.abspath(path),
-                    'content': content}
+                    'content': content, 'images': images, 'skipped': skipped}
         except Exception as e:
             return {'error': str(e)}
 

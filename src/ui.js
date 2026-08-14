@@ -224,7 +224,7 @@ var MopaiUI = (function () {
     _setFolder(res.dir, res.files, res.path);
     var msg = "已加载 " + res.name + "，识别 " + n + " 张图片";
     if (res.skipped && res.skipped.length > 0) {
-      msg += "（" + res.skipped.length + " 张超过 5MB 已跳过）";
+      msg += "（" + res.skipped.length + " 个图片引用无法加载）";
     }
     _toast(msg);
   }
@@ -268,6 +268,7 @@ var MopaiUI = (function () {
     window.pywebview.api.read_file(abs).then(function (res) {
       if (!res || res.error) { _toast((res && res.error) || "读取失败", true); return; }
       _dirty = false;
+      MopaiAssets.setMap(res.images || {}); // 切换文章：更新为该文的图片引用映射
       MopaiState.update({ currentPath: res.path, title: res.name, markdown: res.content });
       _els.editor.value = res.content;
       _els.filename.textContent = res.name;

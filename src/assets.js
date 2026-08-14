@@ -13,14 +13,19 @@ var MopaiAssets = (function () {
   var _clipCount = 0;
 
   function setMap(obj) {
-    _map = {};
+    // 保留粘贴图（clipboard-*），只替换文件夹/引用图片
+    var newMap = {};
+    for (var k in _map) {
+      if (k.indexOf('clipboard-') === 0) newMap[k] = _map[k];
+    }
     var n = 0;
     for (var k in obj) {
       if (obj.hasOwnProperty(k)) {
-        _map[_norm(k)] = obj[k];
+        newMap[_norm(k)] = obj[k];
         n++;
       }
     }
+    _map = newMap;
     return n;
   }
 
