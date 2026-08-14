@@ -143,8 +143,10 @@ class Api:
 
     # ---------- 文件 / 文件夹 ----------
 
-    def _scan_images(self, base_dir):
-        """递归扫描目录图片为 {相对路径: dataURI}，超 5MB 记入 skipped"""
+    def _scan_images(self, base_dir, md_dirs=None):
+        """递归扫描目录图片为 {相对路径: dataURI}，超 5MB 记入 skipped。
+        md_dirs: 额外为图片注册相对这些目录的键（md 在子目录时，
+        图片引用是相对 md 所在目录的，需要两种键都能命中）"""
         images = {}
         skipped = []
         for root, _dirs, files in os.walk(base_dir):
@@ -161,7 +163,16 @@ class Api:
                 with open(full, 'rb') as f:
                     b64 = base64.b64encode(f.read()).decode('ascii')
                 mime = mimetypes.guess_type(fn)[0] or 'image/png'
-                images[rel] = 'data:%s;base64,%s' % (mime, b64)
+                uri = 'data:%s;base64,%s' % (mime, b64)
+                images[rel] = uri
+                if md_dirs:
+                    for d in md_dirs:
+                        try:
+                            rel2 = os.path.relpath(full, d).replace('\\', '/')
+                        except ValueError:
+                            continue
+                        if not rel2.startswith('..'):
+                            images.setdefault(rel2, uri)
         return images, skipped
 
     def _list_md(self, base_dir):
@@ -180,7 +191,13 @@ class Api:
         base = os.path.abspath(base_dir) if base_dir else os.path.dirname(md_path)
         with open(md_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        images, skipped = self._scan_images(base)
+        # 收集所有 md 所在目录：图片引用相对这些目录的键也要注册
+        md_dirs = [os.path.dirname(md_path)]
+        for rel in self._list_md(base):
+            d = os.path.dirname(os.path.abspath(os.path.join(base, rel)))
+            if d not in md_dirs:
+                md_dirs.append(d)
+        images, skipped = self._scan_images(base, md_dirs)
         return {
             'name': os.path.basename(md_path),
             'path': md_path,
