@@ -370,11 +370,14 @@ class Api:
                     raise
             body = json.dumps({'message': 'Mopai upload %s' % path, 'content': b64}).encode('utf-8')
             req = urllib.request.Request(api, data=body, method='PUT', headers=headers)
-            with urllib.request.urlopen(req, timeout=30) as r:
-                if r.status not in (200, 201):
-                    return {'ok': False, 'error': 'GitHub 返回 %d' % r.status}
+            r = self._urlopen_with_retry(req, tries=3)
+            if r.status not in (200, 201):
+                return {'ok': False, 'error': 'GitHub 返回 %d' % r.status}
             return {'ok': True, 'url': self._jsdelivr_url(repo, path, token)}
         except urllib.error.HTTPError as e:
+            if e.code == 422:
+                # 文件已存在：可能是上次 PUT 成功但响应丢失（SSL 抖动），复用即可
+                return {'ok': True, 'url': self._jsdelivr_url(repo, path, token)}
             if e.code == 401:
                 return {'ok': False, 'error': 'GitHub Token 无效，请检查 ⚙ 设置'}
             if e.code == 404:
@@ -389,6 +392,17 @@ class Api:
         except Exception:
             branch = 'master'
         return 'https://cdn.jsdelivr.net/gh/%s@%s/%s' % (repo, branch, path)
+
+    @staticmethod
+    def _urlopen_with_retry(req, tries=3):
+        """网络抖动（SSL EOF 等）时重试，指数退避"""
+        for i in range(tries):
+            try:
+                return urllib.request.urlopen(req, timeout=30)
+            except urllib.error.URLError:
+                if i == tries - 1:
+                    raise
+                time.sleep(1.5 * (i + 1))
 
     # ---------- 剪贴板（CF_HTML） ----------
 

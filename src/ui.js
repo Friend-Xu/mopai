@@ -124,6 +124,7 @@ var MopaiUI = (function () {
         token: _modeToken(mode),
         onProgress: function (info) {
           if (!info) return;
+          if (info.failed > 0) _toast(info.failed + " 张图片上传失败，重试一次或检查设置", true);
           _updateUploadOverlay(info.done, info.total);
           _els.copyBtn.textContent = "上传图片 " + info.done + "/" + info.total + " ...";
         }
@@ -731,6 +732,7 @@ var MopaiUI = (function () {
       token: _modeToken(mode),
       onProgress: function (info) {
         if (!info) return;
+        if (info.failed > 0) _toast(info.failed + " 张图片上传失败，重试一次或检查设置", true);
         _updateUploadOverlay(info.done, info.total);
       }
     }).then(function () {

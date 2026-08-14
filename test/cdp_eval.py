@@ -20,8 +20,8 @@ def get_page_ws():
     raise RuntimeError('app page not found; is the app running with CDP port %d?' % CDP_PORT)
 
 
-def evaluate(expr):
-    ws = websocket.create_connection(get_page_ws(), timeout=15, suppress_origin=True)
+def evaluate(expr, timeout=15):
+    ws = websocket.create_connection(get_page_ws(), timeout=timeout, suppress_origin=True)
     try:
         ws.send(json.dumps({
             'id': 1,

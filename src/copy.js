@@ -88,20 +88,28 @@ var MopaiCopy = (function () {
     });
   }
 
-  // 把 md 里的本地图片引用（相对路径/引用名）替换为 dataURI
+  // 把 md 里的本地图片引用（相对路径/引用名）替换为 dataURI。
+  // 支持 ![alt](path)、![alt](<path>)、<img src="path"> 三种形式
   function _inlineImages(md) {
     if (!md || typeof MopaiAssets === 'undefined') return md;
-    return md.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (m, alt, src) {
-      if (src.indexOf('data:') === 0 || src.indexOf('http') === 0) return m;
-      if (MopaiAssets.has(src)) {
-        var dataUri = MopaiAssets.get(src);
-        if (dataUri) return '![' + alt + '](' + dataUri + ')';
-      }
-      return m;
+    function lookup(src) {
+      if (src.indexOf('data:') === 0 || src.indexOf('http') === 0) return null;
+      return MopaiAssets.get(src) || null;
+    }
+    md = md.replace(/!\[([^\]]*)\]\((<[^>]+>|[^)\s]+)\)/g, function (m, alt, src) {
+      var bare = src.replace(/^</, '').replace(/>$/, '');
+      var uri = lookup(bare);
+      return uri ? '![' + alt + '](' + uri + ')' : m;
     });
+    md = md.replace(/<img([^>]*)src=["']([^"']+)["']([^>]*)>/g, function (m, pre, src, post) {
+      var uri = lookup(src);
+      return uri ? '<img' + pre + 'src="' + uri + '"' + post + '>' : m;
+    });
+    return md;
   }
 
-  // s.ee / GitHub 模式：把 md 里的 dataURI 逐张上传并替换为公网 URL
+  // s.ee / GitHub 模式：把 md 里的 dataURI 逐张上传并替换为公网 URL。
+  // 单张失败不中断整批：保留原引用，最后通过 notify 报告失败数
   function _uploadMarkdownImages(md, token, notify, uploaderMode) {
     var uris = [];
     var re = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g;
@@ -113,6 +121,7 @@ var MopaiCopy = (function () {
     if (!token) return Promise.reject(new Error(_needTokenMsg(uploaderMode)));
 
     var done = 0;
+    var failed = 0;
     var chain = Promise.resolve();
     uris.forEach(function (uri) {
       chain = chain.then(function () {
@@ -128,12 +137,17 @@ var MopaiCopy = (function () {
             _urlCache[_fp(uri)] = res.url;
             md = _replaceInText(md, uri, res.url);
           } else {
-            throw new Error((res && res.error) || '上传失败');
+            failed++;
           }
+        }).catch(function () {
+          failed++;
         });
       });
     });
-    return chain.then(function () { notify(null); return md; });
+    return chain.then(function () {
+      notify({ done: done, total: uris.length, failed: failed });
+      return md;
+    });
   }
 
   function _replaceInText(text, from, to) {
@@ -183,6 +197,7 @@ var MopaiCopy = (function () {
     }
 
     var done = 0;
+    var failed = 0;
     var chain = Promise.resolve();
 
     tasks.forEach(function (task) {
@@ -199,14 +214,16 @@ var MopaiCopy = (function () {
             _urlCache[_fp(task.dataUri)] = res.url;
             _replace(task, res.url);
           } else {
-            throw new Error((res && res.error) || '上传失败');
+            failed++;
           }
+        }).catch(function () {
+          failed++;
         });
       });
     });
 
     return chain.then(function () {
-      notify(null);
+      notify({ done: done, total: tasks.length, failed: failed });
       return div.innerHTML;
     });
 
