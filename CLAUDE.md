@@ -161,6 +161,11 @@ canvas toDataURL 产物），解码后转 32bpp top-down DIB 写剪贴板。
   所以复制时若处于本地模式且正文含图片，会明确提示改用图床（ui.js）。**发给抖音/头条/CSDN 必须用公网图床（推荐腾讯云 COS）**，
   或者干脆走「⋯ → 导出渲染图片」把 PNG 导出来在编辑器里手动插入（图文/文章都适用）
 - **腾讯云 COS（CSDN 推荐）**：PUT Object + V5 签名（q-sign-algorithm=sha1，host 参与签名），桶需「公有读私有写」；文件名 = SHA256 前 16 位（同名覆盖幂等）；URL `https://{bucket}.cos.{region}.myqcloud.com/{key}`
+- **直接内嵌（inline，抖音/头条可试）**：不改写 URL，dataURI 原样进 CF_HTML——不依赖任何服务器抓图。
+  抖音/头条的文章编辑器抓不到 `127.0.0.1`，但若其支持内嵌图片即可直接上传（微信编辑器会剥 dataURI，不适用；整篇约 1~2MB）
+  ⚠️ **用户实测可行的绕行**（本地模式）：复制后**先粘到 Word，再从 Word 复制粘到抖音**就能成功——
+  Word 是在本机把 `127.0.0.1` 的图抓下来内嵌进文档，之后图片数据随剪贴板一起走，抖音无需抓图。
+  这也反证了失败原因就是"编辑器抓不到本机地址"，而不是图片本身有问题
 - **GitHub 图床（免费，国内受限）**：`PUT https://api.github.com/repos/{repo}/contents/{path}`，SHA256 文件名去重，返回 jsDelivr URL。**jsDelivr 已停止代理 GitHub（301 → raw.githubusercontent.com），国内 raw 不通 → CSDN 转存失败**。仅适合海外/备份。用户仓库：Friend-Xu/mopai-images
 - **s.ee（无免费档，不推荐新用户）**：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`
 

@@ -279,6 +279,13 @@ body {
       </div>
     </label>
     <label class="mode-option">
+      <input type="radio" name="image-mode" value="inline">
+      <div>
+        <div class="mode-title">直接内嵌（无图床，抖音/头条可试）</div>
+        <div class="mode-desc">图片以 base64 随正文一起进剪贴板，不需要图床、不依赖任何服务器抓图——抖音/头条文章编辑器若支持内嵌图片即可直接上传。体积较大（整篇约 1~2MB），微信编辑器会剥掉内嵌图，微信请用本地 HTTP</div>
+      </div>
+    </label>
+    <label class="mode-option">
       <input type="radio" name="image-mode" value="cos">
       <div>
         <div class="mode-title">腾讯云 COS（推荐，CSDN 最稳）</div>

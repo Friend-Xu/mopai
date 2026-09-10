@@ -195,7 +195,9 @@ var MopaiUI = (function () {
         var hasImgs = /data:image/.test(copiedHtml);
         if (mode === "local" && hasImgs) {
           _toast("已复制，但图片链接是本机地址：微信可直接粘贴；抖音/头条/CSDN 抓不到 localhost，" +
-            "请到 ⚙ 设置里改用「腾讯云 COS」图床后重新复制（或用 ⋯ → 导出渲染图片手动上传）", true);
+            "请改用 ⚙ 里的「腾讯云 COS」或「直接内嵌」图床后重新复制（也可 ⋯ → 导出渲染图片手动上传）", true);
+        } else if (mode === "inline" && hasImgs) {
+          _toast("已复制（图片内嵌在正文里）：抖音/头条若支持内嵌图片即可直接上传；失败请改用腾讯云 COS");
         } else {
           _toast("已复制到剪贴板，可直接粘贴到公众号编辑器");
         }

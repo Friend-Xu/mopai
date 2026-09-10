@@ -42,6 +42,13 @@ var MopaiCopy = (function () {
       });
     }
 
+    // 直接内嵌：图片以 dataURI 留在 HTML 里随剪贴板一起走，不依赖任何服务器抓图。
+    // 适合抖音/头条文章编辑器（它们抓不到 127.0.0.1，但若支持内嵌图片就能直接上传）；
+    // 微信编辑器会剥掉 dataURI，所以微信仍用本地 HTTP 模式。
+    if (mode === 'inline') {
+      return _writeClipboard(html);
+    }
+
     // 本地模式（默认）：Python 处理 dataURI → localhost URL
     return window.pywebview.api.prepare_copy(html).then(function (res) {
       if (!res || !res.html) {
