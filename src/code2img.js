@@ -394,10 +394,13 @@ var MopaiCode2Img = (function () {
     }
     // 容差版竖边框：CJK 线框图常按「字数」补空格（汉字当 1 格），内容行的 │ 会整体偏 1~2 格。
     // 严格连续会整个框都认不出来——表现是同一张图里只有对齐的那几个框被重绘、其余仍是方角线框。
-    // 这里允许每行在 ±2 格内存在竖直连通格（_probe 认，箭头格也算竖直连通；横线格不算）。
+    // 注意只在**内部行**上容差：两条横线的端点（角）必须严丝合缝落在边框列上。
+    // 否则 ├── / └── 这类树枝横线会被当成"框"（左右边框都由同一根树干列满足，
+    // 因为 ±2 窗口互相重叠）→ 树状图被画成一摞圆角药丸，和 2 个兄弟节点的线括号风格打架。
     function vSpanTol(c, r1, r2) {
       if (vSpan(c, r1, r2)) return true;
-      for (var rr = r1; rr <= r2; rr++) {
+      if (!_probe(gr, r1, c).v || !_probe(gr, r2, c).v) return false;
+      for (var rr = r1 + 1; rr < r2; rr++) {
         var ok = false;
         for (var d = -2; d <= 2; d++) {
           if (_probe(gr, rr, c + d).v) { ok = true; break; }
@@ -611,6 +614,105 @@ var MopaiCode2Img = (function () {
     };
   }
 
+  // ---------- 竖向流程链（学生 → 持续观察 → 学习状态建模 …）----------
+  // LLM 输出的因果链/步骤链几乎都是「标签行 / 纯箭头行」交替。
+  // 它们和线框图是同一类内容，必须用同一套设计语言（圆角框 + 实心箭头 + 比例字体标签），
+  // 否则同一篇文章里会出现两种风格：一边是矢量设计图，一边是等宽字符卡片。
+  var CHAIN_BOX_H = 30;
+  var CHAIN_GAP = 28;
+  var CHAIN_PAD_X = 16;
+  var CHAIN_MIN_W = 96;
+
+  function _cellsText(s) {
+    var chars = Array.from(s), n = 0;
+    for (var i = 0; i < chars.length; i++) n += _cellOf(chars[i], _ctx, _cellW);
+    return n;
+  }
+
+  /**
+   * 识别竖向流程链：行序列必须是「标签 / 箭头行」严格交替、首尾都是标签。
+   * 保守：行数不足、含框线字符、含长句 → 返回 null（保持等宽卡片，绝不误画散文）。
+   */
+  function _detectChain(code) {
+    var lines = _normalizeLines(code);
+    if (lines.length < 3) return null;
+    var seq = [], dir = 'd', i, t;
+    for (i = 0; i < lines.length; i++) {
+      t = lines[i].trim();
+      if (!t) continue;                                  // 空行（分隔用）忽略
+      if (t.length === 1 && '↓↑→←▼▲►◄'.indexOf(t) >= 0) { seq.push({ arrow: t }); continue; }
+      if (/[─━│┃┌┏┐┓└┗┘┛├┣┤┫┬┳┴┻┼╋╭╮╰╯═║]/.test(t)) return null;   // 线框 → 交给几何重绘
+      if (/^[+\-=~|*#]+$/.test(t)) return null;          // 纯 ASCII 分隔线
+      if (_cellsText(t) > 24) return null;               // 长句不当标签
+      seq.push({ text: t });
+    }
+    if (seq.length < 3 || seq.length % 2 === 0) return null;
+    for (i = 0; i < seq.length; i++) {
+      if (i % 2 === 0) {
+        if (seq[i].arrow) return null;
+      } else {
+        if (!seq[i].arrow) return null;
+        if ('↑▲←◄'.indexOf(seq[i].arrow) >= 0) dir = 'u';  // 逆向链（结果在前）
+      }
+    }
+    var labels = [];
+    for (i = 0; i < seq.length; i += 2) labels.push(seq[i].text);
+    return { labels: labels, dir: dir };
+  }
+
+  /** 节点尺寸：宽度按标签实测宽度（比例字体）撑开，所有节点共用一条中轴 */
+  function _chainLayout(ctx, chain) {
+    ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
+    var boxes = [], maxW = 0;
+    for (var i = 0; i < chain.labels.length; i++) {
+      var w = Math.max(CHAIN_MIN_W, Math.ceil(ctx.measureText(chain.labels[i]).width) + CHAIN_PAD_X * 2);
+      boxes.push({ text: chain.labels[i], w: w });
+      if (w > maxW) maxW = w;
+    }
+    return { boxes: boxes, maxW: maxW, h: boxes.length * CHAIN_BOX_H + (boxes.length - 1) * CHAIN_GAP };
+  }
+
+  function _drawChain(ctx, chain, lay, colors, primary, x0, y0) {
+    var cx = x0 + lay.maxW / 2;                 // 共同中轴
+    var y = y0;
+    var gy = { cellW: 12, lineH: CHAIN_GAP };
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    for (var i = 0; i < lay.boxes.length; i++) {
+      var b = lay.boxes[i], bx = cx - b.w / 2;
+      var last = i === lay.boxes.length - 1;
+      var rad = Math.min(12, b.w / 4, CHAIN_BOX_H / 2);
+      _roundRect(ctx, bx, y, b.w, CHAIN_BOX_H, rad);
+      if (primary) {
+        ctx.fillStyle = _alpha(primary, last ? 0.22 : 0.14);
+        ctx.fill();
+        ctx.strokeStyle = _alpha(primary, last ? 1 : 0.9);
+      } else {
+        ctx.strokeStyle = colors.text;
+      }
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
+      ctx.fillStyle = colors.text;
+      ctx.fillText(b.text, cx, y + CHAIN_BOX_H / 2 + 0.5);
+      y += CHAIN_BOX_H;
+      if (!last) {
+        var mid = y + CHAIN_GAP / 2;
+        var d = _DXY[chain.dir];
+        ctx.strokeStyle = colors.text;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx, mid - d[1] * (CHAIN_GAP / 2 - 1));
+        ctx.lineTo(cx, mid - d[1] * 7);
+        ctx.stroke();
+        _drawArrowHead(ctx, cx, mid, chain.dir, gy, colors.text);
+        y += CHAIN_GAP;
+      }
+    }
+    ctx.textAlign = 'left';
+  }
+
   /** 几何重绘主入口（内容区已由 renderBlock 准备好画布与偏移） */
   function _drawDiagramContent(ctx, layout, colors, primary, geo) {
     var gr = _buildGrid(layout);
@@ -687,8 +789,19 @@ var MopaiCode2Img = (function () {
     _cellW = ctx.measureText('M').width || Math.round(FONT_SIZE * 0.55);
     var layout = _layout(code);
 
-    var contentW = PAD_L + layout.maxCols * _cellW + PAD_R;
-    var contentH = layout.rows.length * LINE_H;
+    // 三种内容形态：线框图（几何重绘）/ 竖向流程链（同款设计语言）/ 其余（等宽网格）
+    var asDiagram = !o.forceText && (!!o.forceDiagram || _detectDiagram(code));
+    var chain = (!o.forceText && !asDiagram) ? _detectChain(code) : null;
+    var chainLay = chain ? _chainLayout(ctx, chain) : null;
+
+    var contentW, contentH;
+    if (chainLay) {
+      contentW = PAD_L + chainLay.maxW + PAD_R;
+      contentH = chainLay.h;
+    } else {
+      contentW = PAD_L + layout.maxCols * _cellW + PAD_R;
+      contentH = layout.rows.length * LINE_H;
+    }
     var W = Math.ceil(contentW);
     var H = Math.ceil(contentH + PAD_T + PAD_B + (title ? BAR_H : 0));
     var MIN_W = 200;
@@ -745,9 +858,8 @@ var MopaiCode2Img = (function () {
       ctx.textAlign = 'left';
     }
 
-    // 正文：图例走几何重绘（L1），其余按等宽网格逐字符绘制
+    // 正文：线框图走几何重绘，流程链走同款节点框，其余按等宽网格逐字符绘制
     var geo = _geo(PAD_L, y0, _cellW, LINE_H);
-    var asDiagram = !o.forceText && (!!o.forceDiagram || _detectDiagram(code));
     if (asDiagram) {
       try {
         _drawDiagramContent(ctx, layout, colors, o.primary, geo);
@@ -755,7 +867,10 @@ var MopaiCode2Img = (function () {
         asDiagram = false; // 重绘失败：退回等宽字符渲染（绝不丢内容）
       }
     }
-    if (!asDiagram) {
+    if (chainLay && !asDiagram) {
+      // 窄链在卡片里居中，宽链自然占满（PAD_L 起）
+      _drawChain(ctx, chain, chainLay, colors, o.primary, Math.max(PAD_L, (W - chainLay.maxW) / 2), y0);
+    } else if (!asDiagram) {
       // 逐字符网格绘制；runs 分段着色；组合字符叠画在前一字符上
       var flatColors = _highlightRuns(code, o.lang, colors);
       var totalChars = 0;

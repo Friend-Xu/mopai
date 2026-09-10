@@ -70,6 +70,27 @@ function _labelWidth(text) {
   return c.measureText(text).width;
 }
 
+// 统计「节点框填充色」像素数：填充 = 主题色 14% 叠在卡片底色上（canvas source-over）
+// 树状图这类只有线条的图必须为 0；一旦框识别误判，就会画出一摞药丸方块
+function _tintCount(im, primaryHex, bgHex, x0, y0, x1, y1) {
+  var cv = document.createElement('canvas');
+  cv.width = im.naturalWidth;
+  cv.height = im.naturalHeight;
+  var c = cv.getContext('2d');
+  c.drawImage(im, 0, 0);
+  var d = c.getImageData(x0, y0, x1 - x0, y1 - y0).data;
+  function rgb(hex) {
+    return [parseInt(hex.substr(1, 2), 16), parseInt(hex.substr(3, 2), 16), parseInt(hex.substr(5, 2), 16)];
+  }
+  var pr = rgb(primaryHex), bg = rgb(bgHex);
+  var tint = [0, 1, 2].map(function (j) { return pr[j] * 0.14 + bg[j] * 0.86; });
+  var n = 0;
+  for (var i = 0; i < d.length; i += 4) {
+    if (Math.abs(d[i] - tint[0]) < 7 && Math.abs(d[i + 1] - tint[1]) < 7 && Math.abs(d[i + 2] - tint[2]) < 7) n++;
+  }
+  return n;
+}
+
 window.runTests = function () {
   // 用「格数对齐」生成器构造样本（CJK=2 格），保证样本自身无空格误差，
   // 渲染后逐行右边框必须重合（否则算渲染器回归）
@@ -213,17 +234,38 @@ window.runTests = function () {
 /**
  * 像素级回归：跑完前面 9 项后执行
  * 10 纯英文单行文本卡必须有字（历史 bug：fillStyle 未初始化 → 文字画成卡片底色）
- * 11 中文 + ↓ 流程卡必须有字，且不得被误判成线框图
- * 12 作者按「字数」补空格的错位线框 == 对齐版本（框识别容差 + 框边竖刺抑制）
- * 13 框内标签里的 v 不得被当成箭头吞掉（标签墨迹宽度 ≈ 文本宽度）
+ * 11 中文 + ↓ 流程卡必须有字
+ * 12 竖向流程链（标签/箭头行交替）重绘成设计稿风节点框（与线框图同款）
+ * 13 普通多行文本（无箭头）不得被误画成流程图
+ * 14 错位线框（按字数补空格）== 对齐版本（框识别容差 + 框边竖刺抑制）
+ * 15 树状图里不得出现节点框（框识别误判会把 ├── 树枝变成一摞圆角药丸）
+ * 16 框内标签里的 v 不得被当成箭头吞掉（标签墨迹宽度 ≈ 文本宽度）
  */
 function _pixelChecks() {
-  var opts = { lang: 'text', codeThemeId: 'debug-console', primary: '#3a7bd5', watermark: false };
+  var PRI = '#3a7bd5';
+  var opts = { lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false };
   var en10 = 'Student Cognitive Model';
   var flow = '前一晚睡眠不足\n       \u2193\n注意力下降\n       \u2193\n工作记忆负荷升高\n       \u2193\n简单计算错误';
+  var list = '姓名\n成绩\n排名\n错题\n出勤';
+  var tree = [
+    '学生 A', '',
+    '知识状态',
+    '\u251c\u2500\u2500 \u6570\u5b66',
+    '\u2502   \u251c\u2500\u2500 \u4ee3\u6570      87%',
+    '\u2502   \u251c\u2500\u2500 \u51e0\u4f55      62%',
+    '\u2502   \u251c\u2500\u2500 \u51fd\u6570      41%',
+    '\u2502   \u2514\u2500\u2500 \u6982\u7387      73%',
+    '\u2502',
+    '\u251c\u2500\u2500 \u7269\u7406',
+    '\u2502   \u251c\u2500\u2500 \u529b\u5b66      81%',
+    '\u2502   \u2514\u2500\u2500 \u7535\u5b66      55%'
+  ].join('\n');
   var enUri = MopaiCode2Img.renderBlock(en10, opts);
   var flowUri = MopaiCode2Img.renderBlock(flow, opts);
-  var flowMono = MopaiCode2Img.renderBlock(flow, { lang: 'text', codeThemeId: opts.codeThemeId, primary: opts.primary, watermark: false, forceText: true });
+  var flowMono = MopaiCode2Img.renderBlock(flow, { lang: 'text', codeThemeId: opts.codeThemeId, primary: PRI, watermark: false, forceText: true });
+  var listUri = MopaiCode2Img.renderBlock(list, opts);
+  var listMono = MopaiCode2Img.renderBlock(list, { lang: 'text', codeThemeId: opts.codeThemeId, primary: PRI, watermark: false, forceText: true });
+  var treeUri = MopaiCode2Img.renderBlock(tree, opts);
 
   // 错位样本：内容行比框线多 1 格（尾随 │ 落在框外），对齐样本补 1 个尾随空格 → 两者总格数相同
   var top = '\u250c' + '\u2500'.repeat(21) + '\u2510';
@@ -256,10 +298,23 @@ function _pixelChecks() {
   }).then(function (im) {
     var st = _inkStats(im, 20, 30, im.naturalWidth - 60, im.naturalHeight - 20);
     log('ink: cjk flow', st.ink > 300, 'ink=' + st.ink);
-    log('cjk flow stays text', flowUri === flowMono, '');
-    show(flowUri, 240);
+    log('cjk flow \u2192 chain', flowUri !== flowMono, '');
+    log('plain list stays text', listUri === listMono, '');
+    show(flowUri, 220);
     log('misaligned box redraw', !!misUri && misUri === aliUri, 'len=' + (misUri ? misUri.length : 0));
-    return _loadImg(boxUri);
+    return _loadImg(misUri);
+  }).then(function (im) {
+    // 对照：这个样本有一个真节点框，必须有大量"节点填充色"像素，否则下面的断言是空转
+    var codeColors = (typeof MopaiThemes !== 'undefined' && MopaiThemes.getCodeThemeColors)
+      ? MopaiThemes.getCodeThemeColors('debug-console') : null;
+    var bgHex = (codeColors && codeColors.bg) || '#0F172A';
+    var boxTint = _tintCount(im, PRI, bgHex, 16, 16, im.naturalWidth - 48, im.naturalHeight - 28);
+    return _loadImg(treeUri).then(function (tim) {
+      var treeTint = _tintCount(tim, PRI, bgHex, 16, 16, tim.naturalWidth - 48, tim.naturalHeight - 28);
+      log('tree has no boxes', boxTint > 2000 && treeTint < 500, 'treeTint=' + treeTint + ' boxTint=' + boxTint);
+      show(treeUri, 260);
+      return _loadImg(boxUri);
+    });
   }).then(function (im) {
     // 标签行中心 y = (PAD_T + 1*LINE_H + LINE_H/2) * SCALE = (16 + 22 + 11) * 2 = 98
     // 采样带左右各留出 PAD+6，避开卡片主题色条与框线本身（否则边界会被算进墨迹）
