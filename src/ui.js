@@ -174,8 +174,10 @@ var MopaiUI = (function () {
       _els.copyBtn.disabled = true;
       var origText = _els.copyBtn.textContent;
       var mode = MopaiState.get("imageMode") || "local";
+      var copiedHtml = "";
       if (mode === "github" || mode === "see" || mode === "cos") _showUploadOverlay();
       _generateOutputReady().then(function (html) {
+        copiedHtml = html;
         return MopaiCopy.copyHTML(html, {
           mode: mode,
           token: _modeToken(mode),
@@ -188,7 +190,15 @@ var MopaiUI = (function () {
         });
       }).then(function () {
         _finishUploadOverlay();
-        _toast("已复制到剪贴板，可直接粘贴到公众号编辑器");
+        // 本地模式把图片改写成本机 127.0.0.1 地址：只有微信编辑器（浏览器端抓图）能用。
+        // 抖音/头条/CSDN 是 HTTPS 页面 + 服务端抓图 → 一定"图片上传失败"，必须提前说清楚。
+        var hasImgs = /data:image/.test(copiedHtml);
+        if (mode === "local" && hasImgs) {
+          _toast("已复制，但图片链接是本机地址：微信可直接粘贴；抖音/头条/CSDN 抓不到 localhost，" +
+            "请到 ⚙ 设置里改用「腾讯云 COS」图床后重新复制（或用 ⋯ → 导出渲染图片手动上传）", true);
+        } else {
+          _toast("已复制到剪贴板，可直接粘贴到公众号编辑器");
+        }
       }).catch(function (err) {
         _hideUploadOverlay();
         _toast(err && err.message ? err.message : "复制失败，请手动选择预览区内容复制", true);

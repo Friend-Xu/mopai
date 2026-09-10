@@ -157,6 +157,9 @@ canvas toDataURL 产物），解码后转 32bpp top-down DIB 写剪贴板。
 
 ## 图床（四模式，⚙ 设置面板切换）
 - **本地 HTTP（默认，仅微信）**：Python 把 dataURI 写临时文件 + 127.0.0.1 随机端口 HTTP 服务；微信粘贴时**浏览器端**抓图上传微信 CDN。CSDN 是**服务端**抓图，访问不到 localhost，不可用
+  ⚠️ **抖音/头条同样是"图片上传失败"**：它们的编辑器是 HTTPS 页面（粘贴的 `http://127.0.0.1` 图片属混合内容，会被拦截/升级）且多为服务端抓图 → 本机地址必然失败。
+  所以复制时若处于本地模式且正文含图片，会明确提示改用图床（ui.js）。**发给抖音/头条/CSDN 必须用公网图床（推荐腾讯云 COS）**，
+  或者干脆走「⋯ → 导出渲染图片」把 PNG 导出来在编辑器里手动插入（图文/文章都适用）
 - **腾讯云 COS（CSDN 推荐）**：PUT Object + V5 签名（q-sign-algorithm=sha1，host 参与签名），桶需「公有读私有写」；文件名 = SHA256 前 16 位（同名覆盖幂等）；URL `https://{bucket}.cos.{region}.myqcloud.com/{key}`
 - **GitHub 图床（免费，国内受限）**：`PUT https://api.github.com/repos/{repo}/contents/{path}`，SHA256 文件名去重，返回 jsDelivr URL。**jsDelivr 已停止代理 GitHub（301 → raw.githubusercontent.com），国内 raw 不通 → CSDN 转存失败**。仅适合海外/备份。用户仓库：Friend-Xu/mopai-images
 - **s.ee（无免费档，不推荐新用户）**：`POST https://s.ee/api/v1/file/upload`，字段 `smfile`，头 `Authorization: <api-key>`

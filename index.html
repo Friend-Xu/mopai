@@ -236,7 +236,7 @@ body {
     <div class="dropdown-menu right" id="more-menu">
       <div class="dropdown-item" id="menu-copy-markdown">复制 Markdown 源码</div>
       <div class="dropdown-item" id="menu-export">导出 HTML</div>
-      <div class="dropdown-item" id="menu-export-images">导出渲染图片…（代码/Mermaid）</div>
+      <div class="dropdown-item" id="menu-export-images">导出渲染图片…（抖音图文 / 手动上传用）</div>
     </div>
   </div>
   <button id="btn-copy" class="primary">📋 复制到公众号</button>
@@ -275,7 +275,7 @@ body {
       <input type="radio" name="image-mode" value="local" checked>
       <div>
         <div class="mode-title">本地 HTTP（默认，免费）</div>
-        <div class="mode-desc">复制时启动本机临时服务提供图片，无需注册（仅微信编辑器可用）</div>
+        <div class="mode-desc">复制时启动本机临时服务提供图片，无需注册。<b>仅微信编辑器可用</b>——图片链接是 127.0.0.1，抖音/头条/CSDN 抓不到会提示「图片上传失败」，请改用腾讯云 COS，或用 ⋯ → 导出渲染图片手动上传</div>
       </div>
     </label>
     <label class="mode-option">
