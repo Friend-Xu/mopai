@@ -96,10 +96,15 @@ hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
   （tex-svg 输出自带字形 path，不依赖系统字体）→ SVG → PNG（3x）。
   行内公式按 MathJax 的 vertical-align 换算成 `vertical-align: Npx` 与正文基线对齐；
   颜色/字号跟随文章主题正文（`_mathOpts()`）；`$199` 这类价格不会误判（闭合 `$` 后不接数字）。
-  **展示公式防缩小（两道）**：① 展示图必须写死 CSS 宽度——PNG 是 3x 像素，不写宽度浏览器就按
+  **展示公式三道保护**：① 展示图必须写死 CSS 宽度——PNG 是 3x 像素，不写宽度浏览器就按
   3 倍尺寸显示、再被 `max-width:100%` 压回栏宽，长公式会被压成看不清的小字；
   ② 宽度超过 `MAX_DISPLAY_W`(620px) 的展示公式，按顶层运算符贪心折行成 `aligned` 多行
-  （仍是一张图，有 `=` 时以等号对齐，`{}`、`\left…\right` 内部绝不折行；折不出 2 行就保持原样）。
+  （仍是一张图，有 `=` 时以等号对齐，`{}`、`\left…\right` 内部绝不折行；折不出 2 行就保持原样）；
+  ③ **统一画布宽 `DISPLAY_W`(640px) + 上下 10px 留白 + 垂直居中 + 铺文章底色**——
+  展示公式的天然宽度差异极大（`\frac{2}{5}` 只有 17px、长等式 580px），若各按各的宽度出图，
+  平台/图床按栏宽或整屏拉伸后**孤立分式反而比长等式大好几倍**（用户实测「占据整个屏幕」）。
+  同宽画布把"公式相对画布很小"这件事烘进图片本身，任何缩放比例下视觉尺度都一致；
+  行内公式不受影响（仍紧凑、按 vertical-align 对齐）。
   state `mathAsImage`（⚙ 面板可关，关闭则显示 LaTeX 源码）
 
 **图片尺寸下限**：抖音/头条要求图片**最小 100×100 像素**。三个光栅化入口
@@ -186,10 +191,10 @@ runtime\python.exe test\cdp_eval.py "document.title"
 无自动化测试套件。`test/sample-article/`（git 忽略）是端到端验证用的样例文章。
 `test/code2img-smoke.html`（浏览器打开后执行 `runTests()`，或 `python -m http.server` 后访问；
 等待 `window.__done === true`，结果在 `window.__tests` / `#results`）：
-自跑 25 项断言 —— 前 9 项：等宽转图（CJK 对齐 + hljs 配色）、```img 围栏、全局开关、
+自跑 27 项断言 —— 前 9 项：等宽转图（CJK 对齐 + hljs 配色）、```img 围栏、全局开关、
 未标记代码块保持文本、几何重绘结果与等宽渲染不同、普通代码不被误判为图例、
 Mermaid 懒加载渲染、公式（行内/块级）转图、`$199` 价格不误判。
-后 16 项是**像素级 / 形态 / 配额 / 尺寸**断言（只判断「dataURI 非空」会漏掉整块画成底色的空白卡片）：
+后 18 项是**像素级 / 形态 / 配额 / 尺寸**断言（只判断「dataURI 非空」会漏掉整块画成底色的空白卡片）：
 - 区域内「非底色像素」（墨迹）计数：英文单行标签、中文 + ↓ 流程卡都必须有字
 - `cjk flow → chain`、`plain list → list card`、`single label → chip`：三种形态都必须被重绘
   （渲染结果与 `forceText` 不同）；`code-ish text stays mono`：含 `=`/`()` 的文本必须**不**重绘
@@ -200,8 +205,10 @@ Mermaid 懒加载渲染、公式（行内/块级）转图、`$199` 价格不误�
 - `plain text: no image`：```text 纯文本必须**不**出 `<img>`（省抖音 30 张配额）；
   ```` ```img ```` 仍然强制转图；`code still becomes image`：代码块仍然转图
 - `display formula has css width`：展示公式必须带 `width: Npx`（否则 3x PNG 按 3 倍显示再被压小）
-- `wide formula wraps`（宽度 ≤640 且变成多行）、`short formula untouched`
+- `wide formula wraps`（宽度 ≤640 且变成多行）、`short formula stays one line`
 - `all images ≥ 100×100`：小卡片 / 小公式 / 小流程图的光栅化结果都必须 ≥100×100（抖音硬要求）
+- `display formulas share one band`：不同展示公式的 CSS 宽度必须一致（都用 `DISPLAY_W` 画布，
+  否则平台按栏宽拉伸后大小乱掉——孤立分式反而比长等式大）；`inline formula stays tight`
 页面内附带渲染结果图便于肉眼检查对齐与观感。
 验证真实文章：`docs/测试md文件.md`（整篇 26 张图 = 代码 17 + 公式 9，低于抖音 30 张上限；
 17 个纯文本块排成段落；图片逐张统计墨迹 0 张空白、尺寸最小 101×106；9 张公式图无残留占位）。

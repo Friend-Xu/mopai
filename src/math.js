@@ -20,6 +20,12 @@ var MopaiMath = (function () {
   // 抖音/头条要求图片最小 100×100 像素：小公式自动提高光栅化倍率
   // （显示尺寸由 CSS width 控制，与倍率无关，所以只是更清晰，不会变大）
   var MIN_IMG = 100;
+  // 展示公式统一画布宽度（1x px）：所有展示公式都画在同宽画布上居中。
+  // 否则尺寸随内容乱变——孤立分式只有 17px 宽、长等式 580px，平台按栏宽/整屏拉伸后
+  // 反而是孤立分式大得离谱（用户实测：\frac{2}{5} 拉伸后占满整屏）。
+  // 同宽画布让所有展示公式共享一个视觉尺度，也和正文栏宽（公众号约 677px）对齐。
+  var DISPLAY_W = 640;
+  var DISPLAY_PAD_Y = 10;
 
   /** 光栅化倍率：保证结果不小于 MIN_IMG×MIN_IMG（只放大、不缩小） */
   function _fitScale(scale, w, h) {
@@ -97,16 +103,25 @@ var MopaiMath = (function () {
     return out;
   }
 
-  function _rasterize(svg, wPx, hPx) {
+  /**
+   * 光栅化：cw/ch 为画布像素尺寸；draw 为 SVG 的绘制矩形（默认铺满画布）
+   * bg 非空时先铺底色（展示公式铺文章底色，避免平台把透明区渲染成黑色）
+   */
+  function _rasterize(svg, cw, ch, draw, bg) {
     return new Promise(function (resolve, reject) {
       var img = new Image();
       img.onload = function () {
         try {
           var c = document.createElement('canvas');
-          c.width = Math.max(1, Math.ceil(wPx));
-          c.height = Math.max(1, Math.ceil(hPx));
+          c.width = Math.max(1, Math.ceil(cw));
+          c.height = Math.max(1, Math.ceil(ch));
           var ctx = c.getContext('2d');
-          ctx.drawImage(img, 0, 0, c.width, c.height);
+          if (bg) {
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, 0, c.width, c.height);
+          }
+          if (draw) ctx.drawImage(img, draw.x, draw.y, draw.w, draw.h);
+          else ctx.drawImage(img, 0, 0, c.width, c.height);
           resolve(c.toDataURL('image/png'));
         } catch (e) {
           reject(e);
@@ -235,7 +250,7 @@ var MopaiMath = (function () {
     var color = o.color || '#333333';
     var fontPx = o.fontPx || 16;
     var scale = o.scale || DEFAULT_SCALE;
-    var key = [tex, display, color, fontPx, scale].join('\u0001');
+    var key = [tex, display, color, fontPx, scale, o.bg || ''].join('\u0001');
     if (_cache[key]) return Promise.resolve(_cache[key]);
 
     return ensureLoaded().then(function () {
@@ -247,13 +262,30 @@ var MopaiMath = (function () {
       var r2 = _render(wrapped, true, color, fontPx);
       return r2.wPx < r.wPx ? r2 : r;
     }).then(function (r) {
-      var sc = _fitScale(scale, r.wPx, r.hPx);
+      var cw, ch, draw = null;
+      if (display) {
+        // 展示公式：同宽画布 + 上下留白 + 居中（视觉尺度与正文栏宽一致）
+        cw = Math.max(DISPLAY_W, r.wPx);
+        ch = r.hPx + DISPLAY_PAD_Y * 2;
+      } else {
+        cw = r.wPx;
+        ch = r.hPx;
+      }
+      var sc = _fitScale(scale, cw, ch);
+      if (display) {
+        draw = {
+          x: Math.round((cw - r.wPx) / 2 * sc),
+          y: Math.round(DISPLAY_PAD_Y * sc),
+          w: Math.round(r.wPx * sc),
+          h: Math.round(r.hPx * sc)
+        };
+      }
       var raster = _setSvgSize(r.svg, Math.round(r.wPx * sc), Math.round(r.hPx * sc));
-      return _rasterize(raster, r.wPx * sc, r.hPx * sc).then(function (uri) {
+      return _rasterize(raster, cw * sc, ch * sc, draw, display ? (o.bg || '') : '').then(function (uri) {
         var res = {
           uri: uri,
-          width: Math.round(r.wPx * 10) / 10,
-          height: Math.round(r.hPx * 10) / 10,
+          width: Math.round(cw * 10) / 10,
+          height: Math.round(ch * 10) / 10,
           valign: Math.round(r.valignPx * 100) / 100
         };
         if (Object.keys(_cache).length > 200) _cache = {};
@@ -286,6 +318,7 @@ var MopaiMath = (function () {
     var color = o.color || '#333333';
     var fontPx = o.fontPx || 16;
     var scale = o.scale || DEFAULT_SCALE;
+    var bg = o.bg || '';
 
     return ensureLoaded().then(function () {
       var chain = Promise.resolve();
@@ -298,7 +331,7 @@ var MopaiMath = (function () {
               if (el.parentNode) el.parentNode.removeChild(el);
               return;
             }
-            return toPng(tex, { display: display, color: color, fontPx: fontPx, scale: scale })
+            return toPng(tex, { display: display, color: color, fontPx: fontPx, scale: scale, bg: bg })
               .then(function (res) {
                 var img = document.createElement('img');
                 img.setAttribute('src', res.uri);

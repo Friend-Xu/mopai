@@ -368,8 +368,8 @@ function _renderChecks(theme) {
       'w=' + Math.round(r.width) + ' h=' + Math.round(r.height));
     return MopaiMath.toPng('E = mc^2', { display: true, color: '#333333', fontPx: 16 });
   }).then(function (r) {
-    log('short formula untouched', r.width < 120 && r.height < 30,
-      'w=' + Math.round(r.width) + ' h=' + Math.round(r.height));
+    // 展示公式现在统一画布宽（640），所以"是否被折行"看的是高度：单行 ≈38，两行 ≈62
+    log('short formula stays one line', r.height < 50, 'w=' + Math.round(r.width) + ' h=' + Math.round(r.height));
     // 尺寸下限：抖音/头条要求图片 ≥100×100（小公式会被自动提高倍率）
     var tinyCard = MopaiCode2Img.renderBlock('A', { lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false });
     var mhost = document.createElement('div');
@@ -387,6 +387,22 @@ function _renderChecks(theme) {
       var list = ims.filter(Boolean);
       var ok = list.length === 4 && list.every(function (im) { return im.naturalWidth >= 100 && im.naturalHeight >= 100; });
       log('all images \u2265 100\u00d7100', ok, list.map(function (im) { return im.naturalWidth + 'x' + im.naturalHeight; }).join(' '));
+      // 展示公式统一画布：不同公式的 CSS 宽度必须一致（否则平台按栏宽拉伸后大小乱掉）
+      var bandHost = document.createElement('div');
+      document.body.appendChild(bandHost);
+      bandHost.innerHTML = MopaiEngine.render('$$\n\\frac{2}{5}\n$$\n\n\u884c\u5185 $x$\n\n$$\na+b+c\n$$', theme, {});
+      return MopaiMath.renderAllIn(bandHost, { color: '#333333', fontPx: 16, bg: '#ffffff' }).then(function () {
+        var ds = Array.from(bandHost.querySelectorAll('img[data-math-img="display"]'));
+        var widths = ds.map(function (el) {
+          var m = /width:\s*(\d+)px/.exec(el.getAttribute('style') || '');
+          return m ? +m[1] : 0;
+        });
+        log('display formulas share one band', widths.length === 2 && widths[0] === widths[1] && widths[0] >= 400,
+          'widths=' + widths.join(','));
+        var inl = bandHost.querySelector('img[data-math-img="inline"]');
+        var inlW = inl ? parseInt(inl.getAttribute('width') || '0', 10) : 0;
+        log('inline formula stays tight', inlW > 0 && inlW < 120, 'inlineW=' + inlW);
+      });
     });
   });
 }

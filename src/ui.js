@@ -632,12 +632,13 @@ var MopaiUI = (function () {
     _decorateRenderedImgs();
   }
 
-  // 公式渲染选项：颜色/字号跟随当前文章主题正文
+  // 公式渲染选项：颜色/字号跟随当前文章主题正文；bg 用于展示公式画布铺底（避免透明区变黑）
   function _mathOpts(theme) {
     var body = (theme && theme.body) || {};
     return {
       color: body.color || "#333333",
-      fontPx: parseFloat(body.fontSize) || 16
+      fontPx: parseFloat(body.fontSize) || 16,
+      bg: body.backgroundColor || "#ffffff"
     };
   }
 
