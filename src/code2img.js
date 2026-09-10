@@ -12,6 +12,8 @@ var MopaiCode2Img = (function () {
   'use strict';
 
   var SCALE = 2;               // 导出 2x，清晰
+  var MIN_IMG = 100;           // 抖音/头条：图片最小 100×100 像素（小卡片自动提高倍率）
+  var MAX_SCALE = 16;
   var FONT_SIZE = 15;          // 1x 字号
   var LINE_H = 22;             // 1x 行高
   var PAD_L = 20, PAD_R = 20, PAD_T = 16, PAD_B = 16;
@@ -1009,9 +1011,11 @@ var MopaiCode2Img = (function () {
     var MIN_W = 200;
     if (W < MIN_W) W = MIN_W; // 窄内容保持卡片比例
 
-    canvas.width = W * scale;
-    canvas.height = H * scale;
-    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    // 抖音/头条要求图片最小 100×100：小卡片自动提高倍率（显示尺寸由 CSS 控制，不受影响）
+    var sc = Math.max(scale, Math.min(MAX_SCALE, Math.ceil(MIN_IMG / Math.max(1, Math.min(W, H)))));
+    canvas.width = W * sc;
+    canvas.height = H * sc;
+    ctx.setTransform(sc, 0, 0, sc, 0, 0);
 
     var barH = title ? BAR_H : 0;
     var y0 = barH + PAD_T;

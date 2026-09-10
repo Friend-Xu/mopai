@@ -17,6 +17,15 @@ var MopaiMath = (function () {
   // 展示公式最大宽度（1x px）。公众号正文栏约 677px，抖音更窄；超宽公式会被 max-width:100%
   // 缩到看不清（长等式尤其明显）→ 先按顶层运算符折行成 aligned 多行公式（仍然只占 1 张图）
   var MAX_DISPLAY_W = 620;
+  // 抖音/头条要求图片最小 100×100 像素：小公式自动提高光栅化倍率
+  // （显示尺寸由 CSS width 控制，与倍率无关，所以只是更清晰，不会变大）
+  var MIN_IMG = 100;
+
+  /** 光栅化倍率：保证结果不小于 MIN_IMG×MIN_IMG（只放大、不缩小） */
+  function _fitScale(scale, w, h) {
+    var min = Math.max(1, Math.min(w, h));
+    return Math.max(scale, Math.min(16, Math.ceil(MIN_IMG / min)));
+  }
 
   function ensureLoaded() {
     if (_ready) return Promise.resolve();
@@ -238,8 +247,9 @@ var MopaiMath = (function () {
       var r2 = _render(wrapped, true, color, fontPx);
       return r2.wPx < r.wPx ? r2 : r;
     }).then(function (r) {
-      var raster = _setSvgSize(r.svg, Math.round(r.wPx * scale), Math.round(r.hPx * scale));
-      return _rasterize(raster, r.wPx * scale, r.hPx * scale).then(function (uri) {
+      var sc = _fitScale(scale, r.wPx, r.hPx);
+      var raster = _setSvgSize(r.svg, Math.round(r.wPx * sc), Math.round(r.hPx * sc));
+      return _rasterize(raster, r.wPx * sc, r.hPx * sc).then(function (uri) {
         var res = {
           uri: uri,
           width: Math.round(r.wPx * 10) / 10,

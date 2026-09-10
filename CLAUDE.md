@@ -102,6 +102,12 @@ hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
   （仍是一张图，有 `=` 时以等号对齐，`{}`、`\left…\right` 内部绝不折行；折不出 2 行就保持原样）。
   state `mathAsImage`（⚙ 面板可关，关闭则显示 LaTeX 源码）
 
+**图片尺寸下限**：抖音/头条要求图片**最小 100×100 像素**。三个光栅化入口
+（`code2img.renderBlock`、`math.toPng`、`mermaid._rasterize`）都会按内容尺寸自动提高倍率：
+`scale = max(默认倍率, ceil(100 / min(w, h)))`（上限 16）。因为展示尺寸一律由 CSS
+（`width:Npx` + `max-width:100%`）决定，提高倍率只是更清晰、不会让图变大。
+实测整篇 30 张图最小 101×106，0 张不达标。
+
 **对齐原理**（code2img.js）：不依赖字体度量，按字符网格绝对定位——
 CJK/全角/emoji 占 2 格、ASCII/框线字符占 1 格、组合字符 0 格、tab 展开为 2 格；
 字体栈 `Cascadia Mono/Consolas + NSimSun`，测量兜底归格（>1.55 格宽 → 2）。
@@ -172,10 +178,10 @@ runtime\python.exe test\cdp_eval.py "document.title"
 无自动化测试套件。`test/sample-article/`（git 忽略）是端到端验证用的样例文章。
 `test/code2img-smoke.html`（浏览器打开后执行 `runTests()`，或 `python -m http.server` 后访问；
 等待 `window.__done === true`，结果在 `window.__tests` / `#results`）：
-自跑 24 项断言 —— 前 9 项：等宽转图（CJK 对齐 + hljs 配色）、```img 围栏、全局开关、
+自跑 25 项断言 —— 前 9 项：等宽转图（CJK 对齐 + hljs 配色）、```img 围栏、全局开关、
 未标记代码块保持文本、几何重绘结果与等宽渲染不同、普通代码不被误判为图例、
 Mermaid 懒加载渲染、公式（行内/块级）转图、`$199` 价格不误判。
-后 15 项是**像素级 / 形态 / 配额**断言（只判断「dataURI 非空」会漏掉整块画成底色的空白卡片）：
+后 16 项是**像素级 / 形态 / 配额 / 尺寸**断言（只判断「dataURI 非空」会漏掉整块画成底色的空白卡片）：
 - 区域内「非底色像素」（墨迹）计数：英文单行标签、中文 + ↓ 流程卡都必须有字
 - `cjk flow → chain`、`plain list → list card`、`single label → chip`：三种形态都必须被重绘
   （渲染结果与 `forceText` 不同）；`code-ish text stays mono`：含 `=`/`()` 的文本必须**不**重绘
@@ -187,6 +193,7 @@ Mermaid 懒加载渲染、公式（行内/块级）转图、`$199` 价格不误�
   ```` ```img ```` 仍然强制转图；`code still becomes image`：代码块仍然转图
 - `display formula has css width`：展示公式必须带 `width: Npx`（否则 3x PNG 按 3 倍显示再被压小）
 - `wide formula wraps`（宽度 ≤640 且变成多行）、`short formula untouched`
+- `all images ≥ 100×100`：小卡片 / 小公式 / 小流程图的光栅化结果都必须 ≥100×100（抖音硬要求）
 页面内附带渲染结果图便于肉眼检查对齐与观感。
 验证真实文章：`docs/测试md文件.md`（整篇 26 张图 = 代码 17 + 公式 9，低于抖音 30 张上限；
-17 个纯文本块排成段落；图片逐张统计墨迹 0 张空白；9 张公式图无残留占位）。
+17 个纯文本块排成段落；图片逐张统计墨迹 0 张空白、尺寸最小 101×106；9 张公式图无残留占位）。

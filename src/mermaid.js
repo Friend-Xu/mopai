@@ -87,16 +87,18 @@ var MopaiMermaid = (function () {
     var pad = 20;
     var W = size.w + pad * 2;
     var H = size.h + pad * 2;
+    // 抖音/头条要求图片最小 100×100：小流程图自动提高倍率（显示尺寸由 CSS 控制，不受影响）
+    var sc = Math.max(scale, Math.min(16, Math.ceil(100 / Math.max(1, Math.min(W, H)))));
 
     return new Promise(function (resolve, reject) {
       var img = new Image();
       img.onload = function () {
         try {
           var canvas = document.createElement('canvas');
-          canvas.width = W * scale;
-          canvas.height = H * scale;
+          canvas.width = W * sc;
+          canvas.height = H * sc;
           var ctx = canvas.getContext('2d');
-          ctx.setTransform(scale, 0, 0, scale, 0, 0);
+          ctx.setTransform(sc, 0, 0, sc, 0, 0);
           // 白底卡片 + 边框（mermaid 图表默认白底）
           _roundRect(ctx, 0.5, 0.5, W - 1, H - 1, 12);
           ctx.fillStyle = '#ffffff';

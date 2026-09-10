@@ -19,6 +19,7 @@
 <script>
 window.__tests = [];
 window.__done = false;
+var PRI = '#3a7bd5';   // 测试统一用的主题色
 
 function log(name, ok, extra) {
   window.__tests.push({ name: name, ok: !!ok, extra: extra || '' });
@@ -245,7 +246,6 @@ window.runTests = function () {
  * 16 框内标签里的 v 不得被当成箭头吞掉（标签墨迹宽度 ≈ 文本宽度）
  */
 function _pixelChecks() {
-  var PRI = '#3a7bd5';
   var opts = { lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false };
   var mon = function (code) {
     return MopaiCode2Img.renderBlock(code, { lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false, forceText: true });
@@ -370,6 +370,24 @@ function _renderChecks(theme) {
   }).then(function (r) {
     log('short formula untouched', r.width < 120 && r.height < 30,
       'w=' + Math.round(r.width) + ' h=' + Math.round(r.height));
+    // 尺寸下限：抖音/头条要求图片 ≥100×100（小公式会被自动提高倍率）
+    var tinyCard = MopaiCode2Img.renderBlock('A', { lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false });
+    var mhost = document.createElement('div');
+    document.body.appendChild(mhost);
+    mhost.innerHTML = MopaiEngine.render('```mermaid\nflowchart LR\n  A-->B\n```', theme, {});
+    return MopaiMermaid.renderAllIn(mhost, {}).then(function () {
+      var mimg = mhost.querySelector('img[data-mermaid-img]');
+      return Promise.all([
+        _loadImg(tinyCard),
+        mimg ? _loadImg(mimg.getAttribute('src')) : null,
+        MopaiMath.toPng('\\frac{2}{5}', { display: true, color: '#333333', fontPx: 16 }).then(function (r2) { return _loadImg(r2.uri); }),
+        MopaiMath.toPng('x', { display: false, color: '#333333', fontPx: 16 }).then(function (r3) { return _loadImg(r3.uri); })
+      ]);
+    }).then(function (ims) {
+      var list = ims.filter(Boolean);
+      var ok = list.length === 4 && list.every(function (im) { return im.naturalWidth >= 100 && im.naturalHeight >= 100; });
+      log('all images \u2265 100\u00d7100', ok, list.map(function (im) { return im.naturalWidth + 'x' + im.naturalHeight; }).join(' '));
+    });
   });
 }
 </script>
