@@ -14,7 +14,9 @@ var MopaiState = (function () {
     codeAsImage: false,       // 全局代码转图开关（抖音等平台）
     textAsImage: false,       // 纯文本/标签列表也转图（默认 false：直接排版，省抖音 30 张图片配额）
     watermarkOn: true,        // 转图卡片右下角「墨排 Mopai」水印
-    mathAsImage: true,        // LaTeX 公式 → 图片（富文本平台不支持公式，默认开启）
+    // 公式呈现方式：auto=能 Unicode 文本化就文本（省图片配额，可搜索），复杂公式才转图
+    // image=全部转图（LaTeX 排版最还原）| text=全部纯文本 | source=显示 LaTeX 源码
+    mathMode: 'auto',
     imageHostToken: '',
     imageMode: 'local',
     githubToken: '',
@@ -50,7 +52,7 @@ var MopaiState = (function () {
         themeName: _state.themeName, codeThemeId: _state.codeThemeId,
         codeAsImage: _state.codeAsImage, watermarkOn: _state.watermarkOn,
         textAsImage: _state.textAsImage,
-        mathAsImage: _state.mathAsImage,
+        mathMode: _state.mathMode,
         imageHostToken: _state.imageHostToken, imageMode: _state.imageMode,
         githubToken: _state.githubToken, githubRepo: _state.githubRepo,
         cosSecretId: _state.cosSecretId, cosSecretKey: _state.cosSecretKey,
@@ -73,7 +75,8 @@ var MopaiState = (function () {
         _state.codeAsImage = !!data.codeAsImage;
         _state.textAsImage = !!data.textAsImage;
         _state.watermarkOn = data.watermarkOn !== false;
-        _state.mathAsImage = data.mathAsImage !== false;
+        // 旧版只有 mathAsImage 开关（false = 显示 LaTeX 源码）→ 迁移成 mathMode
+        _state.mathMode = data.mathMode || (data.mathAsImage === false ? 'source' : 'auto');
         _state.imageHostToken = data.imageHostToken || '';
         _state.imageMode = data.imageMode || 'local';
         _state.githubToken = data.githubToken || '';

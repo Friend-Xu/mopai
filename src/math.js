@@ -295,6 +295,297 @@ var MopaiMath = (function () {
     });
   }
 
+  // ===========================================================================
+  // 纯文本公式（Unicode 数学）
+  // 公式转图片是「最还原」的方案，但代价很实在：占图片配额（抖音长图文上限 30 张）、
+  // 不可搜索、不可编辑、被平台二次压缩后还可能糊。而绝大多数公式其实能用 Unicode
+  // 数学字符直接写成纯文本（∑ ∫ √ ≤ ≥ ≠ ≈ α θ π x² xᵢ ½ ⅓ ⅖ →），任何编辑器都剥不掉。
+  // 无法忠实文本化的构造（矩阵/分段函数/盒框/花括号标注/重音）返回 null，退回图片。
+  // ===========================================================================
+  var _SYM = {
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε',
+    zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'ϑ', iota: 'ι', kappa: 'κ', lambda: 'λ',
+    mu: 'μ', nu: 'ν', xi: 'ξ', omicron: 'ο', pi: 'π', varpi: 'ϖ', rho: 'ρ', varrho: 'ϱ',
+    sigma: 'σ', varsigma: 'ς', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ',
+    psi: 'ψ', omega: 'ω',
+    Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Xi: 'Ξ', Pi: 'Π', Sigma: 'Σ',
+    Upsilon: 'Υ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω',
+    times: '×', cdot: '·', div: '÷', pm: '±', mp: '∓', ast: '∗', star: '⋆', circ: '∘',
+    bullet: '•', oplus: '⊕', ominus: '⊖', otimes: '⊗', oslash: '⊘', odot: '⊙',
+    le: '≤', leq: '≤', leqslant: '≤', ge: '≥', geq: '≥', geqslant: '≥', ne: '≠',
+    neq: '≠', equiv: '≡', approx: '≈', sim: '∼', simeq: '≃', cong: '≅', propto: '∝',
+    ll: '≪', gg: '≫', doteq: '≐',
+    in: '∈', notin: '∉', ni: '∋', subset: '⊂', subseteq: '⊆', supset: '⊃', supseteq: '⊇',
+    cup: '∪', cap: '∩', setminus: '∖', emptyset: '∅', varnothing: '∅',
+    forall: '∀', exists: '∃', nexists: '∄', neg: '¬', lnot: '¬', land: '∧', wedge: '∧',
+    lor: '∨', vee: '∨', top: '⊤', bot: '⊥',
+    to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔', Rightarrow: '⇒',
+    Leftarrow: '⇐', Leftrightarrow: '⇔', implies: '⇒', iff: '⇔', mapsto: '↦',
+    uparrow: '↑', downarrow: '↓', updownarrow: '↕', longrightarrow: '⟶', longleftarrow: '⟵',
+    infty: '∞', partial: '∂', nabla: '∇', sum: '∑', prod: '∏', coprod: '∐',
+    int: '∫', iint: '∬', iiint: '∭', oint: '∮', surd: '√',
+    angle: '∠', perp: '⊥', parallel: '∥', triangle: '△', square: '□', diamond: '◇',
+    cdots: '⋯', ldots: '…', dots: '…', vdots: '⋮', ddots: '⋱',
+    prime: '′', hbar: 'ℏ', ell: 'ℓ', Re: 'ℜ', Im: 'ℑ', alef: 'ℵ', wp: '℘',
+    langle: '⟨', rangle: '⟩', lfloor: '⌊', rfloor: '⌋', lceil: '⌈', rceil: '⌉',
+    vert: '|', Vert: '‖', mid: '|', backslash: '\\',
+    '%': '%', '&': '&', '#': '#', '_': '_', '$': '$', '{': '{', '}': '}', '|': '‖',
+    S: '§', P: '¶', copyright: '©', degree: '°', checkmark: '✓'
+  };
+  // 函数名：去掉反斜杠即可（\sin → sin）
+  var _FUNC = {
+    sin: 1, cos: 1, tan: 1, cot: 1, sec: 1, csc: 1, sinh: 1, cosh: 1, tanh: 1, coth: 1,
+    arcsin: 1, arccos: 1, arctan: 1, log: 1, ln: 1, lg: 1, exp: 1, det: 1, dim: 1,
+    ker: 1, hom: 1, arg: 1, deg: 1, gcd: 1, lcm: 1, sup: 1, inf: 1, max: 1, min: 1,
+    lim: 1, limsup: 1, liminf: 1, Pr: 1, mod: 1, bmod: 1, pmod: 1
+  };
+  var _TEXTCMD = {
+    text: 1, mbox: 1, hbox: 1, textrm: 1, textsf: 1, texttt: 1, textbf: 1, textit: 1,
+    textup: 1, textnormal: 1, mathrm: 1, mathit: 1, mathbf: 1, mathsf: 1, mathtt: 1,
+    mathnormal: 1, operatorname: 1, mathbb: 1
+  };
+  var _BB = { R: 'ℝ', N: 'ℕ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ', P: 'ℙ', H: 'ℍ', E: '𝔼', F: '𝔽' };
+  var _SPACE = {
+    ',': 1, ';': 1, ':': 1, '!': 1, ' ': 1, quad: 1, qquad: 1, enspace: 1,
+    thinspace: 1, negthinspace: 1, medspace: 1, thickspace: 1
+  };
+  var _SUP = {
+    '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷',
+    '8': '⁸', '9': '⁹', '+': '⁺', '-': '⁻', '−': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
+    n: 'ⁿ', i: 'ⁱ', a: 'ᵃ', b: 'ᵇ', c: 'ᶜ', d: 'ᵈ', e: 'ᵉ', f: 'ᶠ', g: 'ᵍ', h: 'ʰ',
+    j: 'ʲ', k: 'ᵏ', l: 'ˡ', m: 'ᵐ', o: 'ᵒ', p: 'ᵖ', r: 'ʳ', s: 'ˢ', t: 'ᵗ', u: 'ᵘ',
+    v: 'ᵛ', w: 'ʷ', x: 'ˣ', y: 'ʸ', z: 'ᶻ', T: 'ᵀ'
+  };
+  var _SUB = {
+    '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇',
+    '8': '₈', '9': '₉', '+': '₊', '-': '₋', '−': '₋', '=': '₌', '(': '₍', ')': '₎',
+    a: 'ₐ', e: 'ₑ', h: 'ₕ', i: 'ᵢ', j: 'ⱼ', k: 'ₖ', l: 'ₗ', m: 'ₘ', n: 'ₙ', o: 'ₒ',
+    p: 'ₚ', r: 'ᵣ', s: 'ₛ', t: 'ₜ', u: 'ᵤ', v: 'ᵥ', x: 'ₓ'
+  };
+  var _VULGAR = {
+    '1/2': '½', '1/3': '⅓', '2/3': '⅔', '1/4': '¼', '3/4': '¾', '1/5': '⅕', '2/5': '⅖',
+    '3/5': '⅗', '4/5': '⅘', '1/6': '⅙', '5/6': '⅚', '1/7': '⅐', '1/8': '⅛', '3/8': '⅜',
+    '5/8': '⅝', '7/8': '⅞', '1/9': '⅑', '1/10': '⅒'
+  };
+  // 无法忠实文本化 → 退回图片
+  var _NOT_CMD = /\\(?:boxed|fbox|framebox|overbrace|underbrace|cancel|bcancel|xcancel|sout|vec|bar|hat|tilde|dot|ddot|breve|acute|grave|check|mathring|widehat|widetilde|xrightarrow|xleftarrow|xRightarrow|xleftrightarrow|stackrel|overset|underset|substack|atop|choose|genfrac|rule|color|textcolor|href|url|tag|label|phantom|hphantom|vphantom|mathclap|mathllap|mathrlap|smash|raisebox|bordermatrix|multicolumn|hline|cline|vline|begin|end)(?![a-zA-Z])/;
+  var _BIN = '+-=<>≤≥≠≈±∓×÷·≡∝→←↔⇒⇐⇔↦∈∉⊂⊆∪∩';
+  var MAX_TEXT_INLINE = 48;    // 行内公式文本化上限（再长会把段落撑断，不如出图）
+  var MAX_TEXT_DISPLAY = 200;  // 展示公式文本化上限
+
+  function _no() { throw { mopaiNoText: 1 }; }
+  function _nl() { throw { mopaiNewline: 1 }; }
+
+  /** 读取一个参数：{...} 组，或单个 token（命令 / 单字符） */
+  function _readArg(s, i) {
+    var depth = 0, start = i, c;
+    for (; i < s.length; i++) {
+      c = s.charAt(i);
+      if (c === '\\') { i++; continue; }
+      if (c === '{') depth++;
+      else if (c === '}') {
+        depth--;
+        if (!depth) return { tex: s.slice(start + 1, i), next: i + 1 };
+      }
+    }
+    return { tex: s.slice(start + 1), next: s.length };   // 容错：未闭合
+  }
+
+  function _readArgLoose(s, i) {
+    while (s.charAt(i) === ' ') i++;
+    if (s.charAt(i) === '{') return _readArg(s, i);
+    if (s.charAt(i) === '\\') {
+      var m = /^\\([a-zA-Z]+|[\s\S])/.exec(s.slice(i));
+      var cmd = m ? m[0] : '\\';
+      return { tex: cmd, next: i + cmd.length };
+    }
+    return { tex: s.charAt(i), next: i + 1 };
+  }
+
+  function _mapAll(t, map) {
+    var out = '';
+    for (var i = 0; i < t.length; i++) {
+      var c = t.charAt(i);
+      if (c === ' ') { out += ' '; continue; }
+      if (!map[c]) return null;
+      out += map[c];
+    }
+    return out;
+  }
+  function _sup(t) { var r = _mapAll(t, _SUP); return r === null ? '^(' + t + ')' : r; }
+  function _sub(t) { var r = _mapAll(t, _SUB); return r === null ? '_(' + t + ')' : r; }
+
+  /** 分式：优先 Unicode 分数（½ ⅓ ⅖），否则 a/b，含运算符的操作数加括号 */
+  function _frac(a, b) {
+    var v = _VULGAR[a + '/' + b];
+    if (v) return v;
+    var bare = /^[\w\u0370-\u03ff]{1,8}$/;          // 单个词/字母/数字：不加括号
+    return (bare.test(a) ? a : '(' + a + ')') + '/' + (bare.test(b) ? b : '(' + b + ')');
+  }
+
+  /** \text{...} 内容：原样保留（解开转义），内含命令则放弃文本化 */
+  function _plain(t) {
+    if (/\\/.test(t.replace(/\\([%&#_${}])/g, ''))) _no();
+    return t.replace(/\\([%&#_${}])/g, '$1').replace(/~/g, ' ');
+  }
+
+  function _conv(s) {
+    var out = '', i = 0, c, m, cmd, name;
+    while (i < s.length) {
+      c = s.charAt(i);
+      if (c === '\\') {
+        m = /^\\([a-zA-Z]+|[\s\S])/.exec(s.slice(i));
+        cmd = m ? m[0] : '\\';
+        name = cmd.slice(1);
+        i += cmd.length;
+        if (name === 'frac' || name === 'dfrac' || name === 'tfrac' || name === 'cfrac') {
+          var A = _readArgLoose(s, i); i = A.next;
+          var B = _readArgLoose(s, i); i = B.next;
+          out += _frac(_conv(A.tex), _conv(B.tex));
+        } else if (name === 'sqrt') {
+          var deg = '';
+          if (s.charAt(i) === '[') {
+            var e = s.indexOf(']', i);
+            if (e < 0) _no();
+            deg = _sup(_conv(s.slice(i + 1, e)));
+            i = e + 1;
+          }
+          var R = _readArgLoose(s, i); i = R.next;
+          var inner = _conv(R.tex);
+          out += deg + '√' + (/^[\w\u0370-\u03ff]$/.test(inner) ? inner : '(' + inner + ')');
+        } else if (_TEXTCMD[name]) {
+          var T = _readArgLoose(s, i); i = T.next;
+          var pt = _plain(T.tex);
+          out += (name === 'mathbb' && _BB[pt]) ? _BB[pt] : pt;
+        } else if (name === 'left' || name === 'right' || name === 'middle' ||
+                   /^[bB]igg?[lrm]?$/.test(name)) {
+          if (name === 'right' && s.charAt(i) === '.') i++;   // \right. 隐形定界符
+        } else if (_SPACE[name]) {
+          out += (name === '!' || name === 'negthinspace') ? '' : ' ';
+        } else if (_SYM[name]) {
+          out += _SYM[name];
+        } else if (_FUNC[name]) {
+          out += name;
+        } else if (name === '\\' || name === 'cr' || name === 'newline') {
+          _nl();
+        } else if (name === 'limits' || name === 'nolimits' || name === 'displaystyle' ||
+                   name === 'textstyle' || name === 'scriptstyle' || name === 'mathop' ||
+                   name === 'mathrel' || name === 'mathbin' || name === 'mathord') {
+          /* 无输出修饰 */
+        } else {
+          _no();
+        }
+        continue;
+      }
+      if (c === '{') { var G = _readArg(s, i); i = G.next; out += _conv(G.tex); continue; }
+      if (c === '}') { i++; continue; }
+      if (c === '^' || c === '_') {
+        var S = _readArgLoose(s, i + 1); i = S.next;
+        var v = _conv(S.tex);
+        out += (c === '^' ? _sup(v) : _sub(v));
+        continue;
+      }
+      if (c === '&' || c === '~') { out += ' '; i++; continue; }
+      out += c;
+      i++;
+    }
+    return out;
+  }
+
+  /** 二元运算符两侧补空格（一元 +/- 与上下标不动）：½+⅓ → ½ + ⅓ */
+  function _spaceOps(t) {
+    var out = '', i, c, prev, next, unary, isOp;
+    for (i = 0; i < t.length; i++) {
+      c = t.charAt(i);
+      isOp = _BIN.indexOf(c) >= 0;
+      if (!isOp) { out += c; continue; }
+      prev = out.replace(/\s+$/, '').slice(-1);
+      next = t.charAt(i + 1);
+      unary = (c === '+' || c === '-') &&
+        (prev === '' || '(,[{^_'.indexOf(prev) >= 0 || _BIN.indexOf(prev) >= 0);
+      if (unary) { out += c; continue; }
+      if (out && !/\s$/.test(out)) out += ' ';
+      out += c;
+      if (next && !/^\s/.test(next)) out += ' ';
+    }
+    return out;
+  }
+
+  function _tidy(t) {
+    return t.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').trim();
+  }
+
+  /** 拆 \begin{aligned}…\end{aligned}（也支持 gathered/split/align/gather）为多行 */
+  function _stripAligned(s) {
+    var m = /^\\begin\{(aligned|gathered|split|align\*?|gather\*?)\}([\s\S]*)\\end\{\1\}$/.exec(s.trim());
+    if (!m) return null;
+    return m[2].split(/\\\\/).map(function (l) { return l.replace(/&/g, ' '); });
+  }
+
+  /**
+   * LaTeX（子集）→ Unicode 数学纯文本
+   * @returns {string|null} null = 无法忠实文本化（矩阵/盒框/分段函数/重音…），调用方应退回图片
+   */
+  function toText(tex) {
+    var s = String(tex == null ? '' : tex).trim();
+    if (!s) return null;
+    var lines = _stripAligned(s);
+    if (lines === null) {
+      if (_NOT_CMD.test(s)) return null;
+      lines = [s];
+    }
+    var out = [];
+    try {
+      for (var i = 0; i < lines.length; i++) {
+        if (_NOT_CMD.test(lines[i])) return null;
+        var t = _tidy(_spaceOps(_conv(lines[i])));
+        if (!t) return null;
+        out.push(t);
+      }
+    } catch (e) {
+      return null;
+    }
+    return out.join('\n');
+  }
+
+  function _textFits(text, display) {
+    if (text.indexOf('\n') >= 0 && !display) return false;
+    return text.length <= (display ? MAX_TEXT_DISPLAY : MAX_TEXT_INLINE);
+  }
+
+  function _esc(t) {
+    return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /** 就地替换为纯文本公式（行内继承正文字号；展示公式居中成行） */
+  function _replaceWithText(el, text, display, o) {
+    var node = document.createElement(display ? 'div' : 'span');
+    node.setAttribute('data-math-text', display ? 'display' : 'inline');
+    var st = display
+      ? 'display:block;margin:14px 0;text-align:center;font-size:' +
+        Math.round((o.fontPx || 16) * 1.05) + 'px;line-height:1.9;letter-spacing:0.6px;' +
+        (o.textColor ? 'color:' + o.textColor + ';' : '')
+      : 'letter-spacing:0.3px;' + (text.length <= 20 ? 'white-space:nowrap;' : '');
+    node.setAttribute('style', st);
+    node.innerHTML = _esc(text).replace(/\n/g, '<br>');
+    node.setAttribute('title', '公式（Unicode 纯文本，可搜索、不占图片配额）');
+    if (el.getAttribute('data-line')) node.setAttribute('data-line', el.getAttribute('data-line'));
+    if (el.parentNode) el.parentNode.replaceChild(node, el);
+  }
+
+  /** 无法文本化又强制纯文本时：显示 LaTeX 源码（至少内容不丢） */
+  function _replaceWithSource(el, tex, display) {
+    var node = document.createElement(display ? 'div' : 'span');
+    node.setAttribute('data-math-src', display ? 'display' : 'inline');
+    node.setAttribute('style', display
+      ? 'display:block;margin:14px 0;padding:8px 10px;background:#f6f7f9;border-radius:6px;' +
+        'font-family:Consolas,Menlo,monospace;font-size:13px;color:#555;word-break:break-all;'
+      : 'font-family:Consolas,Menlo,monospace;font-size:.92em;color:#666;word-break:break-all;');
+    node.textContent = tex;
+    if (el.getAttribute('data-line')) node.setAttribute('data-line', el.getAttribute('data-line'));
+    if (el.parentNode) el.parentNode.replaceChild(node, el);
+  }
+
   function _markError(el, err) {
     var msg = (err && err.message) || String(err);
     var span = document.createElement('span');
@@ -309,7 +600,8 @@ var MopaiMath = (function () {
   /**
    * 渲染容器内所有 data-math 占位（串行，避免卡顿）
    * @param {HTMLElement} container
-   * @param {object} opts — { color, fontPx, scale }
+   * @param {object} opts — { color, fontPx, scale, bg, mode }
+   *   mode: 'auto'（默认，能文本化就文本）| 'image'（全部转图）| 'text'（全部纯文本）| 'source'（显示源码）
    */
   function renderAllIn(container, opts) {
     var o = opts || {};
@@ -319,10 +611,35 @@ var MopaiMath = (function () {
     var fontPx = o.fontPx || 16;
     var scale = o.scale || DEFAULT_SCALE;
     var bg = o.bg || '';
+    var mode = o.mode || 'image';
+    if (mode === 'source') return Promise.resolve();   // 保留 LaTeX 源码（不替换）
 
+    // ① 纯文本公式不需要 MathJax（纯字符串转换，瞬时完成）：先就地替换掉能文本化的
+    var todo = [];
+    for (var n = 0; n < nodes.length; n++) {
+      var el0 = nodes[n];
+      var tex0 = (el0.textContent || '').replace(/^\s+|\s+$/g, '');
+      var disp0 = el0.getAttribute('data-math') === 'display';
+      if (!tex0) {
+        if (el0.parentNode) el0.parentNode.removeChild(el0);
+        continue;
+      }
+      if (mode === 'text' || mode === 'auto') {
+        var txt = toText(tex0);
+        if (txt && _textFits(txt, disp0)) {
+          _replaceWithText(el0, txt, disp0, { fontPx: fontPx, textColor: o.textColor || '' });
+          continue;
+        }
+        if (mode === 'text') { _replaceWithSource(el0, tex0, disp0); continue; }
+      }
+      todo.push(el0);
+    }
+    if (!todo.length) return Promise.resolve();
+
+    var pend = todo;
     return ensureLoaded().then(function () {
       var chain = Promise.resolve();
-      for (var i = 0; i < nodes.length; i++) {
+      for (var i = 0; i < pend.length; i++) {
         (function (el) {
           chain = chain.then(function () {
             var tex = el.textContent || '';
@@ -356,15 +673,18 @@ var MopaiMath = (function () {
               })
               .catch(function (err) { _markError(el, err); });
           });
-        })(nodes[i]);
+        })(pend[i]);
       }
       return chain;
     }).catch(function (err) {
-      for (var k = 0; k < nodes.length; k++) _markError(nodes[k], err);
+      for (var k = 0; k < pend.length; k++) _markError(pend[k], err);
     });
   }
 
   function clearCache() { _cache = {}; }
 
-  return { toPng: toPng, renderAllIn: renderAllIn, ensureLoaded: ensureLoaded, clearCache: clearCache };
+  return {
+    toPng: toPng, toText: toText, renderAllIn: renderAllIn,
+    ensureLoaded: ensureLoaded, clearCache: clearCache
+  };
 })();

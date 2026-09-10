@@ -1189,6 +1189,134 @@ var MopaiCode2Img = (function () {
     return div.innerHTML;
   }
 
+  // ===========================================================================
+  // 抖音图文幻灯片：把转图 PNG 合成到统一 3:4 竖版画布（1080×1440）
+  // 为什么：
+  //   ① 抖音图文（图文帖）满屏比例是 3:4（1080×1440），一张 1920×171 的公式带
+  //      直接上传会变成一条细缝（或被平台加黑边/裁切），观感极差；
+  //   ② 抖音/头条要求图片最小 100×100——合成画布一律 1080×1440，尺寸问题从根上消失；
+  //   ③ 多张图统一比例，信息流里观感一致。
+  // 做法：先裁掉四周纯色留白（公式带那种「一条缝」正是靠这步救回来），再等比缩放居中，
+  //       放大不超过 SLIDE_MAX_UP 倍（避免糊），右下角标序号。
+  // ===========================================================================
+  var SLIDE_W = 1080, SLIDE_H = 1440;
+  var SLIDE_PAD_X = 72, SLIDE_PAD_Y = 120;   // 抖音图文信息流底部约 120px 被 UI 遮挡
+  var SLIDE_MAX_UP = 2.5;
+
+  /** 裁掉四周与该图左上角同色的空白（容差 24/765），返回裁剪矩形 */
+  function _trimBox(img) {
+    var w = img.width, h = img.height;
+    var full = { x: 0, y: 0, w: w, h: h };
+    if (w < 4 || h < 4) return full;
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+    var d;
+    try { d = ctx.getImageData(0, 0, w, h).data; } catch (e) { return full; }
+    var r0 = d[0], g0 = d[1], b0 = d[2], tol = 24;
+    function blank(p) {
+      return Math.abs(d[p] - r0) + Math.abs(d[p + 1] - g0) + Math.abs(d[p + 2] - b0) <= tol;
+    }
+    function rowBlank(y) {
+      for (var x = 0; x < w; x++) if (!blank((y * w + x) * 4)) return false;
+      return true;
+    }
+    function colBlank(x, top, bottom) {
+      for (var y = top; y <= bottom; y++) if (!blank((y * w + x) * 4)) return false;
+      return true;
+    }
+    var top = 0, bottom = h - 1, left = 0, right = w - 1;
+    while (top < bottom && rowBlank(top)) top++;
+    while (bottom > top && rowBlank(bottom)) bottom--;
+    while (left < right && colBlank(left, top, bottom)) left++;
+    while (right > left && colBlank(right, top, bottom)) right--;
+    return { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+  }
+
+  /** 底色上的序号颜色（深底用浅字） */
+  function _inkOn(bg) {
+    var m = /^#?([0-9a-fA-F]{6})$/.exec(String(bg || '').replace(/\s/g, ''));
+    if (!m) return 'rgba(0,0,0,0.22)';
+    var v = parseInt(m[1], 16);
+    var lum = (0.299 * ((v >> 16) & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) / 255;
+    return lum < 0.5 ? 'rgba(255,255,255,0.30)' : 'rgba(0,0,0,0.22)';
+  }
+
+  /**
+   * 单张转图 PNG → 1080×1440 竖版幻灯片
+   * @param {string} uri — dataURI
+   * @param {object} opts — { bg, index, total, trim }
+   * @returns {Promise<string>} dataURI
+   */
+  function toSlide(uri, opts) {
+    var o = opts || {};
+    var bg = o.bg || '#ffffff';
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var box = o.trim === false
+            ? { x: 0, y: 0, w: img.width, h: img.height }
+            : _trimBox(img);
+          var maxW = SLIDE_W - SLIDE_PAD_X * 2, maxH = SLIDE_H - SLIDE_PAD_Y * 2;
+          var s = Math.min(maxW / box.w, maxH / box.h, SLIDE_MAX_UP);
+          var dw = Math.max(1, Math.round(box.w * s));
+          var dh = Math.max(1, Math.round(box.h * s));
+          var c = document.createElement('canvas');
+          c.width = SLIDE_W;
+          c.height = SLIDE_H;
+          var ctx = c.getContext('2d');
+          ctx.fillStyle = bg;
+          ctx.fillRect(0, 0, SLIDE_W, SLIDE_H);
+          ctx.imageSmoothingEnabled = true;
+          if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, box.x, box.y, box.w, box.h,
+            Math.round((SLIDE_W - dw) / 2), Math.round((SLIDE_H - dh) / 2), dw, dh);
+          if (o.index) {
+            var num = (o.index < 10 ? '0' : '') + o.index;
+            ctx.save();
+            ctx.font = '500 26px "Segoe UI","Microsoft YaHei","PingFang SC",sans-serif';
+            ctx.textAlign = 'right';
+            ctx.fillStyle = _inkOn(bg);
+            ctx.fillText(o.total ? (num + ' / ' + o.total) : num, SLIDE_W - SLIDE_PAD_X, SLIDE_H - 62);
+            ctx.restore();
+          }
+          resolve(c.toDataURL('image/png'));
+        } catch (e) {
+          reject(e);
+        }
+      };
+      img.onerror = function () { reject(new Error('幻灯片合成失败（图片解码错误）')); };
+      img.src = uri;
+    });
+  }
+
+  /**
+   * 批量合成幻灯片（串行；单张失败退回原图，绝不阻断导出）
+   * @param {string[]} uris
+   * @param {object} opts — { bg, number:false 关闭序号, onProgress(done,total) }
+   * @returns {Promise<string[]>}
+   */
+  function toSlides(uris, opts) {
+    var o = opts || {};
+    var out = [];
+    var chain = Promise.resolve();
+    for (var i = 0; i < uris.length; i++) {
+      (function (uri, k) {
+        chain = chain.then(function () {
+          if (o.onProgress) { try { o.onProgress(k + 1, uris.length); } catch (e) {} }
+          return toSlide(uri, {
+            bg: o.bg,
+            index: o.number === false ? 0 : k + 1,
+            total: o.number === false ? 0 : uris.length
+          }).then(function (s) { out.push(s); }, function () { out.push(uri); });
+        });
+      })(uris[i], i);
+    }
+    return chain.then(function () { return out; });
+  }
+
   function clearCache() {
     _cache = {};
   }
@@ -1197,6 +1325,8 @@ var MopaiCode2Img = (function () {
     renderBlock: renderBlock,
     process: process,
     classify: classify,
+    toSlide: toSlide,
+    toSlides: toSlides,
     clearCache: clearCache
   };
 })();

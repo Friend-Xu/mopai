@@ -236,7 +236,8 @@ body {
     <div class="dropdown-menu right" id="more-menu">
       <div class="dropdown-item" id="menu-copy-markdown">复制 Markdown 源码</div>
       <div class="dropdown-item" id="menu-export">导出 HTML</div>
-      <div class="dropdown-item" id="menu-export-images">导出渲染图片…（抖音图文 / 手动上传用）</div>
+      <div class="dropdown-item" id="menu-export-images">导出渲染图片…（原图 PNG，插进文章用）</div>
+      <div class="dropdown-item" id="menu-export-slides">导出抖音图文幻灯片…（3:4 竖版 1080×1440）</div>
     </div>
   </div>
   <button id="btn-copy" class="primary">📋 复制到公众号</button>
@@ -248,13 +249,18 @@ body {
 <div class="settings-panel" id="settings-panel">
   <h3>设置</h3>
   <div class="settings-sub">转图设置</div>
-  <label class="mode-option" style="margin-bottom:8px">
-    <input type="checkbox" id="math-toggle" style="margin-top:3px">
-    <div>
-      <div class="mode-title">公式转图片</div>
-      <div class="mode-desc">$…$ / $$…$$ / \(…\) 用 MathJax 渲染成图片，可粘贴到公众号、抖音（关闭则显示 LaTeX 源码）</div>
+  <div class="mode-option" style="margin-bottom:8px;align-items:flex-start">
+    <div style="flex:1">
+      <div class="mode-title">公式呈现方式</div>
+      <div class="mode-desc">富文本平台不支持 LaTeX。多数公式可以直接写成 <b>Unicode 数学纯文本</b>（∑ ∫ √ x² xᵢ ½ ⅖），不占图片配额、还能被搜索；矩阵/分段函数/盒框这类复杂公式才需要转图片</div>
+      <select id="math-mode" style="margin-top:6px;width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#333;font-size:13px">
+        <option value="auto">智能（推荐）：简单公式用纯文本，复杂公式转图片</option>
+        <option value="image">全部转图片（排版最还原）</option>
+        <option value="text">全部用 Unicode 纯文本（不占图片配额）</option>
+        <option value="source">显示 LaTeX 源码</option>
+      </select>
     </div>
-  </label>
+  </div>
   <label class="mode-option" style="margin-bottom:14px">
     <input type="checkbox" id="watermark-toggle" style="margin-top:3px">
     <div>

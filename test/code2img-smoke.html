@@ -228,6 +228,9 @@ window.runTests = function () {
     // ---- 17~22：呈现方式与图片配额（抖音文章图片上限 30 张）----
     return _renderChecks(theme);
   }).then(function () {
+    // ---- 23~31：Unicode 纯文本公式 + 抖音图文幻灯片 ----
+    return _textMathChecks(theme);
+  }).then(function () {
     window.__done = true;
   }).catch(function (e) {
     log('mermaid/math render', false, e.message);
@@ -405,6 +408,67 @@ function _renderChecks(theme) {
       });
     });
   });
+}
+
+/**
+ * Unicode 纯文本公式 + 抖音图文幻灯片
+ * 23/24/25/26 简单公式文本化（½ ⅓ / ∑ᵢ₌₁ⁿ / √(x²+y²) / α ≤ β × γ）
+ * 27/28 复杂公式拒绝文本化（矩阵/盒框 → null，退回图片）
+ * 29 auto 模式：能文本化的不占图片配额，复杂的仍转图
+ * 30 text 模式：一个 <img> 都不产生（矩阵退化成 LaTeX 源码，内容不丢）
+ * 31 抖音图文幻灯片：1080×1440 满屏 3:4，且靠「裁掉纯色留白」把公式带放大到接近满宽
+ */
+function _textMathChecks(theme) {
+  var T = MopaiMath.toText;
+  var f1 = T('\\frac{1}{2}+\\frac{1}{3}');
+  var f2 = T('\\sum_{i=1}^{n} a_i x^i');
+  var f3 = T('\\sqrt{x^2+y^2}');
+  var f4 = T('\\alpha\\le\\beta\\times\\gamma');
+  log('math text: fractions', f1 === '\u00bd + \u2153', JSON.stringify(f1));
+  log('math text: sum and limits', f2 === '\u2211\u1d62\u208c\u2081\u207f a\u1d62 x\u2071', JSON.stringify(f2));
+  log('math text: sqrt and power', f3 === '\u221a(x\u00b2 + y\u00b2)', JSON.stringify(f3));
+  log('math text: greek and ops', f4 === '\u03b1 \u2264 \u03b2 \u00d7 \u03b3', JSON.stringify(f4));
+  log('math text: rejects matrix', T('\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}') === null, '');
+  log('math text: rejects boxed', T('\\boxed{x=1}') === null, '');
+
+  var SRC = '\u884c\u5185 $\\frac{1}{2}$ \u4e0e $\\alpha$\n\n$$\n\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}\n$$\n\n$$\nE = mc^2\n$$';
+  var auto = document.createElement('div');
+  var all = document.createElement('div');
+  document.body.appendChild(auto);
+  document.body.appendChild(all);
+  auto.innerHTML = MopaiEngine.render(SRC, theme, {});
+  all.innerHTML = MopaiEngine.render(SRC, theme, {});
+  return MopaiMath.renderAllIn(auto, { color: '#333333', fontPx: 16, bg: '#ffffff', mode: 'auto' })
+    .then(function () {
+      var texts = auto.querySelectorAll('[data-math-text]').length;
+      var imgs = auto.querySelectorAll('img[data-math-img]').length;
+      // 行内分式 + α + E=mc² 文本化（3），矩阵转图（1）
+      log('auto mode: text unless complex', texts === 3 && imgs === 1,
+        'text=' + texts + ' img=' + imgs);
+      return MopaiMath.renderAllIn(all, { color: '#333333', fontPx: 16, bg: '#ffffff', mode: 'text' });
+    }).then(function () {
+      var imgs = all.querySelectorAll('img').length;
+      var src = all.querySelectorAll('[data-math-src]').length;
+      log('text mode: zero images', imgs === 0 && src === 1, 'img=' + imgs + ' src=' + src);
+      var card = MopaiCode2Img.renderBlock('A', {
+        lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false
+      });
+      var CHK = '\\frac{1}{2}+\\frac{1}{3}+\\frac{1}{5}+\\frac{1}{7}';
+      return MopaiMath.toPng(CHK, { display: true, color: '#333333', fontPx: 16 })
+        .then(function (r) { return MopaiCode2Img.toSlides([card, r.uri], { bg: '#ffffff' }); });
+    }).then(function (slides) {
+      log('slides composed', slides.length === 2, 'n=' + slides.length);
+      return Promise.all(slides.map(_loadImg));
+    }).then(function (ims) {
+      var sizeOk = ims.length === 2 && ims.every(function (im) {
+        return im.naturalWidth === 1080 && im.naturalHeight === 1440;
+      });
+      log('slides are 3:4 1080\u00d71440', sizeOk,
+        ims.map(function (im) { return im.naturalWidth + 'x' + im.naturalHeight; }).join(' '));
+      // 只取中间带（避开右下角序号），公式带裁掉纯色留白后应放大到接近满宽
+      var st = _inkStats(ims[1], 0, 200, 1080, 1240);
+      log('slide band trimmed', st.w > 540 && st.ink > 200, 'inkW=' + st.w + ' ink=' + st.ink);
+    });
 }
 </script>
 </body>

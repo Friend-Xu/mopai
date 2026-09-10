@@ -75,8 +75,9 @@ var MopaiUI = (function () {
     _els.menuCopyMarkdown = document.getElementById("menu-copy-markdown");
     _els.menuExport = document.getElementById("menu-export");
     _els.menuExportImages = document.getElementById("menu-export-images");
+    _els.menuExportSlides = document.getElementById("menu-export-slides");
     _els.watermarkToggle = document.getElementById("watermark-toggle");
-    _els.mathToggle = document.getElementById("math-toggle");
+    _els.mathMode = document.getElementById("math-mode");
     _els.textImgToggle = document.getElementById("textimg-toggle");
     _els.phoneFrame = document.getElementById("phone-frame");
     _els.phoneScreen = document.getElementById("phone-screen");
@@ -137,13 +138,11 @@ var MopaiUI = (function () {
         _updatePreview();
       });
     }
-    if (_els.mathToggle) {
-      _els.mathToggle.addEventListener("change", function () {
-        MopaiState.set("mathAsImage", _els.mathToggle.checked);
+    if (_els.mathMode) {
+      _els.mathMode.addEventListener("change", function () {
+        MopaiState.set("mathMode", _els.mathMode.value);
         _updatePreview();
-        _toast(_els.mathToggle.checked
-          ? "公式将渲染为图片（可粘贴到公众号/抖音）"
-          : "公式转图片已关闭：预览显示 LaTeX 源码");
+        _toast(_MATH_MODE_TIP[_els.mathMode.value] || "公式呈现方式已切换");
       });
     }
     if (_els.textImgToggle) {
@@ -244,8 +243,14 @@ var MopaiUI = (function () {
     });
     _els.menuExportImages.addEventListener("click", function () {
       _closeMenus();
-      _exportRenderedImages();
+      _exportRenderedImages(false);
     });
+    if (_els.menuExportSlides) {
+      _els.menuExportSlides.addEventListener("click", function () {
+        _closeMenus();
+        _exportRenderedImages(true);
+      });
+    }
     _els.settingsBtn.addEventListener("click", function (e) {
       e.stopPropagation();
       var isOpen = _els.settingsPanel.style.display === "block";
@@ -262,7 +267,7 @@ var MopaiUI = (function () {
         _els.cosBucketInput.value = MopaiState.get("cosBucket") || "";
         _els.cosRegionInput.value = MopaiState.get("cosRegion") || "";
         if (_els.watermarkToggle) _els.watermarkToggle.checked = MopaiState.get("watermarkOn") !== false;
-        if (_els.mathToggle) _els.mathToggle.checked = MopaiState.get("mathAsImage") !== false;
+        if (_els.mathMode) _els.mathMode.value = _mathMode();
       }
     });
     _els.settingsPanel.addEventListener("click", function (e) {
@@ -618,7 +623,7 @@ var MopaiUI = (function () {
         border: "rgba(128,128,128,0.25)"
       }));
     }
-    if (typeof MopaiMath !== "undefined" && MopaiState.get("mathAsImage") !== false) {
+    if (typeof MopaiMath !== "undefined" && _mathMode() !== "source") {
       tasks.push(MopaiMath.renderAllIn(_els.preview, _mathOpts(t)));
     }
     if (tasks.length) {
@@ -633,12 +638,26 @@ var MopaiUI = (function () {
   }
 
   // 公式渲染选项：颜色/字号跟随当前文章主题正文；bg 用于展示公式画布铺底（避免透明区变黑）
+  // mode 决定「文本化 / 转图 / 源码」——auto 下简单公式走 Unicode 纯文本（不占图片配额）
+  var _MATH_MODE_TIP = {
+    auto: "公式智能呈现：简单公式用 Unicode 纯文本（可搜索、不占图片配额），矩阵/分段/盒框等复杂公式仍转图片",
+    image: "公式全部转图片：排版最还原，但每张占 1 个图片配额（抖音长图文上限 30 张）",
+    text: "公式全部用 Unicode 纯文本：不占图片配额、可搜索；无法文本化的公式显示 LaTeX 源码",
+    source: "显示 LaTeX 源码：不转图、不文本化（预览即源码）"
+  };
+  function _mathMode() {
+    var m = MopaiState.get("mathMode");
+    return (m === "image" || m === "text" || m === "source") ? m : "auto";
+  }
+
   function _mathOpts(theme) {
     var body = (theme && theme.body) || {};
     return {
       color: body.color || "#333333",
+      textColor: body.color || "#333333",
       fontPx: parseFloat(body.fontSize) || 16,
-      bg: body.backgroundColor || "#ffffff"
+      bg: body.backgroundColor || "#ffffff",
+      mode: _mathMode()
     };
   }
 
@@ -689,7 +708,7 @@ var MopaiUI = (function () {
     if (typeof MopaiMermaid !== "undefined") {
       tasks.push(MopaiMermaid.renderAllIn(div, { primary: (theme && theme.primary) || null }));
     }
-    if (typeof MopaiMath !== "undefined" && MopaiState.get("mathAsImage") !== false) {
+    if (typeof MopaiMath !== "undefined" && _mathMode() !== "source") {
       tasks.push(MopaiMath.renderAllIn(div, _mathOpts(theme)));
     }
     if (!tasks.length) {
@@ -839,7 +858,12 @@ var MopaiUI = (function () {
     });
   }
 
-  function _exportRenderedImages() {
+  /**
+   * 导出转图图片
+   * @param {boolean} asSlide — true：合成 1080×1440 竖版幻灯片（抖音图文满屏 3:4；
+   *   顺带保证每张都远超平台 100×100 的图片下限，公式带也不会变成一条细缝）
+   */
+  function _exportRenderedImages(asSlide) {
     var imgs = _els.preview.querySelectorAll(IMG_SEL);
     var uris = [];
     for (var i = 0; i < imgs.length; i++) {
@@ -850,14 +874,35 @@ var MopaiUI = (function () {
       _toast("当前没有转图图片（开启 🖼 代码转图，或使用 ```img / ```mermaid 围栏）", true);
       return;
     }
-    _toast("请选择保存文件夹…（" + uris.length + " 张）");
-    MopaiCopy.exportImages(uris).then(function (res) {
-      if (res && res.ok) {
-        _toast("已导出 " + res.count + " 张 PNG 到 " + res.dir + "，可直接上传抖音图文");
-      } else if (res && res.cancelled) { /* 用户取消 */ }
-      else _toast("导出失败: " + ((res && res.error) || "未知错误"), true);
+    var theme = _getTheme(MopaiState.get("themeName"));
+    var bg = (theme && theme.body && theme.body.backgroundColor) || "#ffffff";
+    function save(list, label) {
+      _toast("请选择保存文件夹…（" + list.length + " 张" + label + "）");
+      MopaiCopy.exportImages(list).then(function (res) {
+        if (res && res.ok) {
+          _toast("已导出 " + res.count + " 张 PNG 到 " + res.dir + "，可直接上传抖音图文");
+        } else if (res && res.cancelled) { /* 用户取消 */ }
+        else _toast("导出失败: " + ((res && res.error) || "未知错误"), true);
+      }).catch(function (err) {
+        _toast(err && err.message ? err.message : "导出失败", true);
+      });
+    }
+    if (!asSlide) { save(uris, ""); return; }
+    if (typeof MopaiCode2Img === "undefined" || !MopaiCode2Img.toSlides) {
+      save(uris, "");
+      return;
+    }
+    _toast("正在合成抖音图文幻灯片（1080×1440）…");
+    MopaiCode2Img.toSlides(uris, {
+      bg: bg,
+      onProgress: function (done, total) {
+        if (done < total) _toast("正在合成抖音图文幻灯片… " + done + "/" + total);
+      }
+    }).then(function (slides) {
+      save(slides, " 竖版幻灯片");
     }).catch(function (err) {
-      _toast(err && err.message ? err.message : "导出失败", true);
+      _toast("幻灯片合成失败，已退回原图导出：" + ((err && err.message) || err), true);
+      save(uris, "");
     });
   }
 
@@ -867,19 +912,33 @@ var MopaiUI = (function () {
     _els.code2ImgBtn.classList.toggle("active", on);
     _els.code2ImgBtn.textContent = on ? "🖼 代码转图 ✓" : "🖼 代码转图";
     // ⚙ 面板里的开关同步（面板未打开时也保持一致）
-    if (_els.mathToggle) _els.mathToggle.checked = MopaiState.get("mathAsImage") !== false;
+    if (_els.mathMode) _els.mathMode.value = _mathMode();
     if (_els.watermarkToggle) _els.watermarkToggle.checked = MopaiState.get("watermarkOn") !== false;
     if (_els.textImgToggle) _els.textImgToggle.checked = !!MopaiState.get("textAsImage");
   }
 
-  // 图片配额提示：抖音「文章」最多 30 张图，超了会发不出去
+  // 图片配额提示：抖音「长图文」最多 30 张图、单图最小 100×100（超了发不出去）
   var IMG_LIMIT = 30;
+  var IMG_MIN = 100;
   function _updateImgCount() {
     if (!_els.imgCount || !_els.preview) return;
-    var n = _els.preview.querySelectorAll("img").length;
+    var imgs = _els.preview.querySelectorAll("img");
+    var n = imgs.length;
     if (!n) { _els.imgCount.textContent = ""; return; }
-    _els.imgCount.textContent = "图片 " + n + "/" + IMG_LIMIT + (n > IMG_LIMIT ? " ⚠ 超限" : "");
-    _els.imgCount.style.color = n > IMG_LIMIT ? "#d9534f" : "#aaa";
+    var minM = 1e9, minW = 0, minH = 0;   // 取「最接近违规」的那张（min(宽,高) 最小）
+    for (var i = 0; i < n; i++) {
+      var w = imgs[i].naturalWidth, h = imgs[i].naturalHeight;
+      if (!w || !h) continue;             // 还没解码完的图先跳过（渲染完成后会再算一次）
+      if (Math.min(w, h) < minM) { minM = Math.min(w, h); minW = w; minH = h; }
+    }
+    var over = n > IMG_LIMIT;
+    var tiny = minW > 0 && (minW < IMG_MIN || minH < IMG_MIN);
+    var txt = "图片 " + n + "/" + IMG_LIMIT;
+    if (minW > 0) txt += " · 最小 " + minW + "×" + minH;
+    if (over) txt += " ⚠ 超限";
+    if (tiny) txt += " ⚠ 小于 " + IMG_MIN + "×" + IMG_MIN;
+    _els.imgCount.textContent = txt;
+    _els.imgCount.style.color = (over || tiny) ? "#d9534f" : "#aaa";
   }
 
   function _revealEditorLine(line) {
