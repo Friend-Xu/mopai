@@ -9,8 +9,11 @@ setup-runtime.cmd    ← 新机器上一键重建 runtime/（下载嵌入式 Pyt
 app.py               ← 入口：pywebview 窗口 + Python API 桥
 runtime/             ← 嵌入式 Python 3.12.9 + pywebview（git 忽略，setup 脚本重建）
 index.html           ← 前端单页（全部 CSS 内联 <style>，JS 按序 <script> 加载）
-src/                 ← 11 个 IIFE 模块（ES5 风格，无构建步骤）
+src/                 ← 14 个 IIFE 模块（ES5 风格，无构建步骤）
+lib/mermaid.min.js   ← Mermaid v11（vendor，离线可用；首张流程图出现时才懒加载）
+lib/mathjax-tex-svg.js ← MathJax v3 tex-svg（vendor，离线可用；首个公式出现时才懒加载）
 test/cdp_eval.py     ← CDP 调试工具（见下文"调试"）
+test/code2img-smoke.html ← 转图/几何重绘/Mermaid/公式 渲染冒烟测试（浏览器打开即跑）
 ```
 
 ## 前后端桥（window.pywebview.api）
@@ -25,27 +28,71 @@ test/cdp_eval.py     ← CDP 调试工具（见下文"调试"）
 | `upload_image_github(dataUri, token, repo)` | 上传到 GitHub 仓库（SHA256 指纹文件名去重），返回 jsDelivr CDN URL `{ok, url}` |
 | `upload_image_cos(dataUri, secretId, secretKey, bucket, region)` | 上传到腾讯云 COS（V5 HMAC 签名，纯标准库），SHA256 文件名幂等覆盖，返回公网直链 `{ok, url}` |
 | `copy_html(html)` | CF_HTML + CF_UNICODETEXT 双格式写剪贴板 |
+| `copy_image(dataUri)` | 单张 PNG → 剪贴板（CF_DIB + 注册 CF_PNG 双格式，可 Ctrl+V 粘贴到抖音/头条等） |
+| `save_image_as(dataUri, name?)` | 原生另存为对话框保存转图 PNG，返回 `{ok, path}` |
+| `export_images(dataUris)` | 原生选文件夹，批量写 `mopai-01.png…`（抖音图文批量上传），返回 `{ok, count, dir}` |
 
 **Win32 ctypes 注意**：所有句柄/指针函数必须声明 `restype/argtypes`（见 `_setup_win32()`），否则 64 位下指针截断导致 access violation。
 
 ## 模块加载顺序（index.html）
 ```
 hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
-→ table-strategy → assets → engine → file-io → image-upload → copy → export → ui
+→ table-strategy → assets → code2img → mermaid → math → engine → file-io
+→ image-upload → copy → export → ui
 ```
 
 ## 核心数据流
 ```
 打开文件夹 → app.py 扫描 → {MD内容, 图片映射} → MopaiAssets.setMap()
 编辑器输入 → engine.render() 管线：
-  1. markdown-it → HTML
+  1. markdown-it → HTML（fence 规则：```img / ```diagram / ```mono / ```mermaid 打标记，
+     全局 codeAsImage 时所有 ``` 代码块打标记；$…$/$$…$/\(…\)/\[…\] → data-math 占位）
   2. applyTheme() 内联样式 + 标题装饰（h2Content span）+ 图注（img title → figcaption）
   3. MopaiAssets.resolveImages() 相对路径 → dataURI（仅预览）
   4. inlineHighlightStyles() 代码高亮内联化
   5. MopaiTable.process() 表格自适应（卡片/DL/滑动）
+  6. MopaiCode2Img.process() 标记的代码块 → Canvas 渲染 PNG（同步；线框图自动几何重绘）
+  7. （预览后，异步）MopaiMermaid.renderAllIn() 流程图 → PNG
+     MopaiMath.renderAllIn() 公式 → PNG
 复制到公众号 → copy.js：
-  dataURI 图片逐张 upload_image() → 替换为图床 URL → copy_html() 写剪贴板
+  _generateOutputReady() 先等 Mermaid/公式转图完成，再 dataURI 图片逐张 upload_image()
+  → 替换为图床 URL → copy_html() 写剪贴板
+转图使用（抖音/头条）：单击预览图 copy_image()（CF_DIB）→ 粘贴；
+  双击 save_image_as()；⋯ 菜单 export_images() 批量导出 PNG 文件夹
 ```
+
+## 代码转图 / 几何重绘 / Mermaid / 公式（富文本平台的"内容转图片"方案）
+抖音/头条编辑器会剥除 HTML 标签、压缩空格，ASCII 图/代码块/LaTeX 公式都无法保真。
+墨排统一把它们渲染成 PNG（走现有图片上传管线），共四类：
+
+- **等宽转图**：全局开关 `🖼 代码转图`（state `codeAsImage`）+ 单围栏 ```` ```img 标题… ````；
+  info 第二段若是已知 hljs 语言则高亮，其余作卡片标题
+- **几何重绘（L1，自动）**：识别线框图（框线字符 / `+---+` 线框）后重绘为设计稿风矢量图——
+  圆角矩形节点 + 主题色描边填充 + 实心箭头 + 标签按比例字体居中。
+  线条识别借鉴 svgbob / Markdeep(aasvg) / ditaa 的规则，但线格判定在**字符网格**上做（CJK 双宽感知）。
+  逃生开关：```` ```diagram ```` 强制重绘、```` ```mono ```` 强制等宽字符；
+  重绘抛异常时自动退回等宽渲染（绝不丢内容）。检测启发式见 `_detectDiagram()`（保守，宁可不转）
+- **Mermaid**：```` ```mermaid 标题… ```` → 懒加载 lib/mermaid.min.js → SVG → PNG（2x）
+- **公式**：`$…$` / `\(…\)` 行内、`$$…$$` / `\[…\]` 块级 → 懒加载 lib/mathjax-tex-svg.js
+  （tex-svg 输出自带字形 path，不依赖系统字体）→ SVG → PNG（3x）。
+  行内公式按 MathJax 的 vertical-align 换算成 `vertical-align: Npx` 与正文基线对齐；
+  颜色/字号跟随文章主题正文（`_mathOpts()`）；`$199` 这类价格不会误判（闭合 `$` 后不接数字）。
+  state `mathAsImage`（⚙ 面板可关，关闭则显示 LaTeX 源码）
+
+**对齐原理**（code2img.js）：不依赖字体度量，按字符网格绝对定位——
+CJK/全角/emoji 占 2 格、ASCII/框线字符占 1 格、组合字符 0 格、tab 展开为 2 格；
+字体栈 `Cascadia Mono/Consolas + NSimSun`，测量兜底归格（>1.55 格宽 → 2）。
+
+**卡片美化**：圆角 + 代码主题边框 + 主题色左侧条 + Mac 风格标题栏（有标题时）+
+右下角「墨排 Mopai」水印（state `watermarkOn`，⚙ 面板可关）。
+
+**交互**：单击预览图（代码/几何图/Mermaid/公式）= 复制图片
+（Win32 `copy_image`，CF_DIB+CF_PNG，可 Ctrl+V 粘到抖音）；双击 = 原生另存为；
+⋯ 菜单「导出渲染图片…」= 批量导出 `mopai-01.png…`。
+复制到公众号时 `_generateOutputReady()` 会**先等异步转图完成**再复制（否则会把占位源码复制出去）。
+
+**Python 侧**：`_png_to_rgba()` 是纯标准库最小 PNG 解码器（8bit 非隔行 RGB/RGBA，
+canvas toDataURL 产物），解码后转 32bpp top-down DIB 写剪贴板。
 
 ## 关键设计约束
 1. **一切样式必须内联** —— 公众号编辑器剥除 `<style>`/`<link>`/`class`
@@ -80,4 +127,9 @@ runtime\python.exe test\cdp_eval.py "document.title"
 打开文件夹 → 相对路径图片映射 → 图注渲染 → 无 Key 时复制给引导提示 → CF_HTML 写剪贴板（Python 读回验证）→ 假 Key 上传得 401（链路通，真 Key 即可成功）。
 
 ## 测试
-无测试套件。`test/sample-article/`（git 忽略）是端到端验证用的样例文章。
+无自动化测试套件。`test/sample-article/`（git 忽略）是端到端验证用的样例文章。
+`test/code2img-smoke.html`（浏览器直接打开，或 `python -m http.server` 后访问）：
+自跑 9 项断言 —— 等宽转图（CJK 对齐 + hljs 配色）、```img 围栏、全局开关、
+未标记代码块保持文本、几何重绘结果与等宽渲染不同、普通代码不被误判为图例、
+Mermaid 懒加载渲染、公式（行内/块级）转图、`$199` 价格不误判；
+页面内附带渲染结果图便于肉眼检查对齐与观感。

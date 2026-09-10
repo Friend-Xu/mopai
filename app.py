@@ -10,6 +10,9 @@ pywebview 窗口 + 暴露给前端的 Python API：
   - prepare_copy()   本地 HTTP 模式：dataURI → localhost URL（默认模式）
   - save_file()      写回 md 文件到磁盘
   - copy_html()      以 CF_HTML 格式写入剪贴板
+  - copy_image()     单张 PNG（转图）→ 剪贴板（CF_DIB + CF_PNG）
+  - save_image_as()  转图 PNG 原生另存为
+  - export_images()  转图 PNG 批量导出到文件夹（抖音图文）
 """
 import base64
 import ctypes
@@ -22,11 +25,13 @@ import os
 import re
 import shutil
 import socket
+import struct
 import tempfile
 import threading
 import time
 import urllib.parse
 import urllib.request
+import zlib
 
 import webview
 
@@ -468,6 +473,67 @@ class Api:
         except Exception as e:
             return {'ok': False, 'error': str(e)}
 
+    # ---------- 代码转图 / Mermaid 图：复制图片、另存、批量导出 ----------
+
+    def copy_image(self, data_uri):
+        """单张 PNG（dataURI）→ 剪贴板（CF_DIB + CF_PNG 双格式）。
+        适用于把转图直接 Ctrl+V 粘贴到抖音/头条/CSDN/掘金等编辑器。"""
+        try:
+            _set_clipboard_image(data_uri)
+            return {'ok': True}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
+    def save_image_as(self, data_uri, default_name='mopai-code.png'):
+        """原生另存为对话框，保存单张转图 PNG"""
+        try:
+            b64 = data_uri.split(',', 1)[1] if ',' in data_uri else data_uri
+            raw = base64.b64decode(b64)
+            if not raw.startswith(b'\x89PNG'):
+                return {'ok': False, 'error': '不是有效的 PNG 数据'}
+            result = self._window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=default_name or 'mopai-code.png',
+                file_types=('PNG 图片 (*.png)', '所有文件 (*.*)')
+            )
+            if not result:
+                return {'ok': False, 'cancelled': True}
+            path = result[0] if isinstance(result, (tuple, list)) else result
+            if not path.lower().endswith('.png'):
+                path += '.png'
+            with open(path, 'wb') as f:
+                f.write(raw)
+            return {'ok': True, 'path': path}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
+    def export_images(self, data_uris):
+        """批量导出 PNG：原生选文件夹，按顺序写 mopai-01.png …
+        抖音图文（图片轮播）上传前最方便的准备方式。"""
+        if not data_uris:
+            return {'ok': False, 'error': '没有可导出的图片'}
+        try:
+            result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+            if not result:
+                return {'ok': False, 'cancelled': True}
+            folder = result[0] if isinstance(result, (tuple, list)) else result
+            count = 0
+            for i, uri in enumerate(data_uris, 1):
+                try:
+                    b64 = uri.split(',', 1)[1] if ',' in uri else uri
+                    raw = base64.b64decode(b64)
+                    if not raw.startswith(b'\x89PNG'):
+                        continue
+                    path = os.path.join(folder, 'mopai-%02d.png' % i)
+                    with open(path, 'wb') as f:
+                        f.write(raw)
+                    count += 1
+                except Exception:
+                    continue
+            return {'ok': True, 'count': count, 'dir': folder}
+        except Exception as e:
+            return {'ok': False, 'error': str(e)}
+
 
 # ---------- Windows CF_HTML 实现 ----------
 
@@ -540,6 +606,100 @@ def _set_clipboard_html(html):
         _set_clipboard_data(kernel32, user32, _build_cf_html(html), cf_html)
         text = html.encode('utf-16-le') + b'\x00\x00'
         _set_clipboard_data(kernel32, user32, text, CF_UNICODETEXT)
+    finally:
+        user32.CloseClipboard()
+
+
+# ---------- 图片剪贴板（CF_DIB + CF_PNG）与 PNG 解码 ----------
+
+CF_DIB = 8
+
+
+def _png_to_rgba(data):
+    """最小 PNG 解码器：8bit、非隔行、RGB/RGBA（Chrome canvas toDataURL 产物）。
+    返回 (width, height, rgba_bytes, channels)"""
+    if not data.startswith(b'\x89PNG'):
+        raise ValueError('不是 PNG 数据')
+    pos = 8
+    idat = b''
+    w = h = ctype = None
+    while pos + 8 <= len(data):
+        length, kind = struct.unpack('>I4s', data[pos:pos + 8])
+        chunk = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if kind == b'IHDR':
+            w, h, bitdepth, ctype, _comp, _filt, interlace = struct.unpack('>IIBBBBB', chunk)
+            if interlace != 0:
+                raise ValueError('隔行 PNG 不支持')
+            if bitdepth != 8:
+                raise ValueError('位深 %d 不支持' % bitdepth)
+        elif kind == b'IDAT':
+            idat += chunk
+        elif kind == b'IEND':
+            break
+    if not w or not h:
+        raise ValueError('PNG 缺少 IHDR')
+    channels = {2: 3, 6: 4}.get(ctype)
+    if not channels:
+        raise ValueError('color type %d 不支持' % ctype)
+    raw = zlib.decompress(idat)
+    stride = w * channels
+    out = bytearray(h * stride)
+    prev = bytearray(stride)
+    p = 0
+    for r in range(h):
+        ft = raw[p]
+        p += 1
+        line = bytearray(raw[p:p + stride])
+        p += stride
+        if ft == 1:  # Sub
+            for i in range(channels, stride):
+                line[i] = (line[i] + line[i - channels]) & 0xFF
+        elif ft == 2:  # Up
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif ft == 3:  # Average
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 0xFF
+        elif ft == 4:  # Paeth
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b = prev[i]
+                c = prev[i - channels] if i >= channels else 0
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pr) & 0xFF
+        out[r * stride:(r + 1) * stride] = line
+        prev = line
+    return w, h, bytes(out), channels
+
+
+def _dib_from_rgba(w, h, rgba, channels):
+    """RGBA 像素 → 32bpp 自顶向下 DIB（CF_DIB 剪贴板格式）"""
+    bgra = bytearray()
+    for i in range(0, len(rgba), channels):
+        r, g, b = rgba[i], rgba[i + 1], rgba[i + 2]
+        a = 255 if channels == 3 else rgba[i + 3]
+        bgra += bytes((b, g, r, a))
+    header = struct.pack('<IiiHHIIiiII', 40, w, -h, 1, 32, 0, w * h * 4, 0, 0, 0, 0)
+    return header + bytes(bgra)
+
+
+def _set_clipboard_image(data_uri):
+    """PNG dataURI → Windows 剪贴板（CF_DIB + 注册的 CF_PNG 双格式）"""
+    kernel32, user32 = _setup_win32()
+    b64 = data_uri.split(',', 1)[1] if ',' in data_uri else data_uri
+    png = base64.b64decode(b64)
+    w, h, rgba, ch = _png_to_rgba(png)
+    dib = _dib_from_rgba(w, h, rgba, ch)
+    cf_png = user32.RegisterClipboardFormatW('PNG')
+    if not user32.OpenClipboard(None):
+        raise OSError('OpenClipboard failed')
+    try:
+        user32.EmptyClipboard()
+        _set_clipboard_data(kernel32, user32, dib, CF_DIB)
+        _set_clipboard_data(kernel32, user32, png, cf_png)
     finally:
         user32.CloseClipboard()
 

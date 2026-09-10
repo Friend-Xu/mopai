@@ -289,6 +289,54 @@ var MopaiCopy = (function () {
     });
   }
 
+  // ---- 图片操作（代码转图 / Mermaid 图：复制、另存、批量导出） ----
+
+  /**
+   * 复制单张图片（PNG dataURI）到剪贴板 —— 可 Ctrl+V 粘贴到抖音/头条/CSDN/掘金
+   * @param {string} dataUri
+   */
+  function copyImage(dataUri) {
+    if (_isDesktop() && window.pywebview.api.copy_image) {
+      return window.pywebview.api.copy_image(dataUri).then(function (res) {
+        if (res && res.ok) return;
+        return _copyImageBrowser(dataUri);
+      }).catch(function () {
+        return _copyImageBrowser(dataUri);
+      });
+    }
+    return _copyImageBrowser(dataUri);
+  }
+
+  /**
+   * 另存单张 PNG（原生保存对话框）。需要桌面版。
+   */
+  function saveImage(dataUri, defaultName) {
+    if (_isDesktop() && window.pywebview.api.save_image_as) {
+      return window.pywebview.api.save_image_as(dataUri, defaultName || 'mopai-code.png');
+    }
+    return Promise.reject(new Error('保存图片需要桌面版（mopai.cmd 启动）'));
+  }
+
+  /**
+   * 批量导出 PNG 到文件夹（原生选目录）。返回 {ok, count, dir}
+   */
+  function exportImages(dataUris) {
+    if (_isDesktop() && window.pywebview.api.export_images) {
+      return window.pywebview.api.export_images(dataUris);
+    }
+    return Promise.reject(new Error('批量导出需要桌面版（mopai.cmd 启动）'));
+  }
+
+  // 浏览器降级：ClipboardItem 写 image/png
+  function _copyImageBrowser(dataUri) {
+    return fetch(dataUri).then(function (r) { return r.blob(); }).then(function (blob) {
+      if (navigator.clipboard && navigator.clipboard.write && window.ClipboardItem) {
+        return navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      }
+      throw new Error('当前环境不支持复制图片，请用桌面版');
+    });
+  }
+
   function copyText(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
       return navigator.clipboard.writeText(text);
@@ -309,5 +357,13 @@ var MopaiCopy = (function () {
     }
   }
 
-  return { copyHTML: copyHTML, copyMarkdown: copyMarkdown, copyText: copyText };
+  var out = {
+    copyHTML: copyHTML,
+    copyMarkdown: copyMarkdown,
+    copyText: copyText,
+    copyImage: copyImage,
+    saveImage: saveImage,
+    exportImages: exportImages
+  };
+  return out;
 })();

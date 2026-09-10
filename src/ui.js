@@ -12,6 +12,7 @@ var MopaiUI = (function () {
   var _debounceTimer = null;
   var _dirty = false;
   var _filesCache = []; // 当前文件夹的 md 文件列表（拖拽定位用）
+  var IMG_SEL = "img[data-codeimg],img[data-mermaid-img],img[data-math-img]";
 
   function init() {
     MopaiState.init();
@@ -22,6 +23,7 @@ var MopaiUI = (function () {
     _renderThemeSelect();
     _renderCodeThemeSelect();
     _setupMobileMode();
+    _syncCodeImgButton();
     _updatePreview();
     _restoreFolder();
     document.addEventListener("click", _closeAllPanels);
@@ -35,6 +37,7 @@ var MopaiUI = (function () {
     _els.previewWrap = document.getElementById("preview-wrap");
     _els.themeSelect = document.getElementById("theme-select");
     _els.codeThemeSelect = document.getElementById("code-theme-select");
+    _els.code2ImgBtn = document.getElementById("btn-code2img");
     _els.mobileToggle = document.getElementById("mobile-toggle");
     _els.copyBtn = document.getElementById("btn-copy");
     _els.fileBtn = document.getElementById("btn-file");
@@ -70,6 +73,9 @@ var MopaiUI = (function () {
     _els.moreMenu = document.getElementById("more-menu");
     _els.menuCopyMarkdown = document.getElementById("menu-copy-markdown");
     _els.menuExport = document.getElementById("menu-export");
+    _els.menuExportImages = document.getElementById("menu-export-images");
+    _els.watermarkToggle = document.getElementById("watermark-toggle");
+    _els.mathToggle = document.getElementById("math-toggle");
     _els.phoneFrame = document.getElementById("phone-frame");
     _els.phoneScreen = document.getElementById("phone-screen");
     _els.refreshFilesBtn = document.getElementById("btn-refresh-files");
@@ -90,6 +96,11 @@ var MopaiUI = (function () {
     });
     // ④ 预览点击 → 编辑器滚动定位
     _els.preview.addEventListener("click", _onPreviewClick);
+    // 转图双击 → 另存 PNG
+    _els.preview.addEventListener("dblclick", function (e) {
+      var img = e.target.closest(IMG_SEL);
+      if (img) _saveRenderedImage(img);
+    });
 
     // 编辑器输入（debounce 预览）
     _els.editor.addEventListener("input", function () {
@@ -107,6 +118,32 @@ var MopaiUI = (function () {
       MopaiThemes.loadCodeTheme(_els.codeThemeSelect.value);
       _updatePreview();
     });
+    // 代码转图全局开关
+    _els.code2ImgBtn.addEventListener("click", function () {
+      var on = !MopaiState.get("codeAsImage");
+      MopaiState.set("codeAsImage", on);
+      _syncCodeImgButton();
+      _updatePreview();
+      _toast(on
+        ? "代码转图已开启：所有代码块将以图片显示，单击图片可复制"
+        : "代码转图已关闭：代码块恢复文本显示");
+    });
+    if (_els.watermarkToggle) {
+      _els.watermarkToggle.addEventListener("change", function () {
+        MopaiState.set("watermarkOn", _els.watermarkToggle.checked);
+        if (typeof MopaiCode2Img !== "undefined") MopaiCode2Img.clearCache();
+        _updatePreview();
+      });
+    }
+    if (_els.mathToggle) {
+      _els.mathToggle.addEventListener("change", function () {
+        MopaiState.set("mathAsImage", _els.mathToggle.checked);
+        _updatePreview();
+        _toast(_els.mathToggle.checked
+          ? "公式将渲染为图片（可粘贴到公众号/抖音）"
+          : "公式转图片已关闭：预览显示 LaTeX 源码");
+      });
+    }
     _els.mobileToggle.addEventListener("click", function () {
       _previewMode = _previewMode === "desktop" ? "mobile" : "desktop";
       if (_previewMode === "mobile") {
@@ -126,15 +163,17 @@ var MopaiUI = (function () {
       var origText = _els.copyBtn.textContent;
       var mode = MopaiState.get("imageMode") || "local";
       if (mode === "github" || mode === "see" || mode === "cos") _showUploadOverlay();
-      MopaiCopy.copyHTML(_generateOutput(), {
-        mode: mode,
-        token: _modeToken(mode),
-        onProgress: function (info) {
-          if (!info) return;
-          if (info.failed > 0) _toast(info.failed + " 张图片上传失败，重试一次或检查设置", true);
-          _updateUploadOverlay(info.done, info.total);
-          _els.copyBtn.textContent = "上传图片 " + info.done + "/" + info.total + " ...";
-        }
+      _generateOutputReady().then(function (html) {
+        return MopaiCopy.copyHTML(html, {
+          mode: mode,
+          token: _modeToken(mode),
+          onProgress: function (info) {
+            if (!info) return;
+            if (info.failed > 0) _toast(info.failed + " 张图片上传失败，重试一次或检查设置", true);
+            _updateUploadOverlay(info.done, info.total);
+            _els.copyBtn.textContent = "上传图片 " + info.done + "/" + info.total + " ...";
+          }
+        });
       }).then(function () {
         _finishUploadOverlay();
         _toast("已复制到剪贴板，可直接粘贴到公众号编辑器");
@@ -174,8 +213,14 @@ var MopaiUI = (function () {
     _els.menuCopyMarkdown.addEventListener("click", function () { _closeMenus(); _copyMarkdownSource(); });
     _els.menuExport.addEventListener("click", function () {
       _closeMenus();
-      MopaiExport.exportHTML(_generateOutput(), MopaiState.get("title") || "mopai");
-      _toast("HTML 文件已导出");
+      _generateOutputReady().then(function (html) {
+        MopaiExport.exportHTML(html, MopaiState.get("title") || "mopai");
+        _toast("HTML 文件已导出");
+      });
+    });
+    _els.menuExportImages.addEventListener("click", function () {
+      _closeMenus();
+      _exportRenderedImages();
     });
     _els.settingsBtn.addEventListener("click", function (e) {
       e.stopPropagation();
@@ -192,6 +237,8 @@ var MopaiUI = (function () {
         _els.cosSecretKeyInput.value = MopaiState.get("cosSecretKey") || "";
         _els.cosBucketInput.value = MopaiState.get("cosBucket") || "";
         _els.cosRegionInput.value = MopaiState.get("cosRegion") || "";
+        if (_els.watermarkToggle) _els.watermarkToggle.checked = MopaiState.get("watermarkOn") !== false;
+        if (_els.mathToggle) _els.mathToggle.checked = MopaiState.get("mathAsImage") !== false;
       }
     });
     _els.settingsPanel.addEventListener("click", function (e) {
@@ -533,11 +580,59 @@ var MopaiUI = (function () {
     try {
       var name = _els.themeSelect.value || "山吹";
       var theme = _getTheme(name);
-      _els.preview.innerHTML = MopaiEngine.render(md, theme, { wechat: _isWechat(name) });
+      _els.preview.innerHTML = MopaiEngine.render(md, theme, _renderOptions(name));
     } catch (e) {
       _els.preview.innerHTML = "<p style=\"color:red\">渲染错误: " + e.message + "</p>";
     }
     requestAnimationFrame(function () { scroller.scrollTop = savedScroll; });
+    // Mermaid / 公式异步渲染完成后再恢复一次滚动（图片替换会改变文档高度）
+    var tasks = [];
+    var t = _getTheme(_els.themeSelect.value || "山吹");
+    if (typeof MopaiMermaid !== "undefined") {
+      tasks.push(MopaiMermaid.renderAllIn(_els.preview, {
+        primary: (t && t.primary) || null,
+        border: "rgba(128,128,128,0.25)"
+      }));
+    }
+    if (typeof MopaiMath !== "undefined" && MopaiState.get("mathAsImage") !== false) {
+      tasks.push(MopaiMath.renderAllIn(_els.preview, _mathOpts(t)));
+    }
+    if (tasks.length) {
+      Promise.all(tasks).then(function () {
+        scroller.scrollTop = savedScroll;
+        _decorateRenderedImgs();
+      }, function () {
+        _decorateRenderedImgs();
+      });
+    }
+    _decorateRenderedImgs();
+  }
+
+  // 公式渲染选项：颜色/字号跟随当前文章主题正文
+  function _mathOpts(theme) {
+    var body = (theme && theme.body) || {};
+    return {
+      color: body.color || "#333333",
+      fontPx: parseFloat(body.fontSize) || 16
+    };
+  }
+
+  function _renderOptions(name) {
+    return {
+      wechat: _isWechat(name),
+      codeAsImage: !!MopaiState.get("codeAsImage"),
+      watermark: MopaiState.get("watermarkOn") !== false
+    };
+  }
+
+  function _decorateRenderedImgs() {
+    var imgs = _els.preview.querySelectorAll(IMG_SEL);
+    for (var i = 0; i < imgs.length; i++) {
+      var isMath = imgs[i].getAttribute("data-math-img");
+      imgs[i].setAttribute("title", isMath
+        ? "公式图片：单击复制 · 双击保存 PNG"
+        : "单击复制图片 · 双击保存 PNG");
+    }
   }
 
   function _debouncedPreview() {
@@ -548,7 +643,42 @@ var MopaiUI = (function () {
   function _generateOutput() {
     var name = MopaiState.get("themeName");
     var theme = _getTheme(name);
-    return MopaiEngine.render(_els.editor.value || "", theme, { wechat: _isWechat(name) });
+    return MopaiEngine.render(_els.editor.value || "", theme, _renderOptions(name));
+  }
+
+  /**
+   * 生成输出 HTML，并在复制/导出前等待 Mermaid / 公式转图完成
+   * （否则可能把 data-mermaid / data-math 占位源码复制出去）
+   */
+  function _generateOutputReady() {
+    var html = _generateOutput();
+    var theme = _getTheme(MopaiState.get("themeName"));
+    var div = document.createElement("div");
+    div.style.cssText = "position:absolute;left:-9999px;top:-9999px;visibility:hidden;";
+    div.innerHTML = html;
+    document.body.appendChild(div);
+    function done() { document.body.removeChild(div); }
+
+    var tasks = [];
+    if (typeof MopaiMermaid !== "undefined") {
+      tasks.push(MopaiMermaid.renderAllIn(div, { primary: (theme && theme.primary) || null }));
+    }
+    if (typeof MopaiMath !== "undefined" && MopaiState.get("mathAsImage") !== false) {
+      tasks.push(MopaiMath.renderAllIn(div, _mathOpts(theme)));
+    }
+    if (!tasks.length) {
+      done();
+      return Promise.resolve(html);
+    }
+    return Promise.all(tasks).then(function () {
+      var out = div.innerHTML;
+      done();
+      return out;
+    }, function () {
+      var out = div.innerHTML;
+      done();
+      return out || html; // 部分失败：保留已渲染部分
+    });
   }
 
   /**
@@ -650,11 +780,69 @@ var MopaiUI = (function () {
 
   function _onPreviewClick(e) {
     if (e.target.closest("a")) return; // 链接只禁跳，不定位
+    var img = e.target.closest(IMG_SEL);
+    if (img) _copyRenderedImage(img); // 单击转图 = 复制图片（同时仍定位源码行）
     var el = e.target.closest("[data-line]");
     if (!el) return;
     var line = parseInt(el.getAttribute("data-line"), 10);
     if (isNaN(line)) return;
     _revealEditorLine(line);
+  }
+
+  // ---------- 转图图片：复制 / 另存 / 批量导出 ----------
+
+  function _copyRenderedImage(img) {
+    var src = img.getAttribute("src") || "";
+    if (!src || src.indexOf("data:image") !== 0) return;
+    MopaiCopy.copyImage(src).then(function () {
+      _toast("已复制图片，可直接 Ctrl+V 粘贴到抖音/头条/公众号等编辑器");
+    }).catch(function (err) {
+      _toast(err && err.message ? err.message : "复制图片失败", true);
+    });
+  }
+
+  function _saveRenderedImage(img) {
+    var src = img.getAttribute("src") || "";
+    if (!src || src.indexOf("data:image") !== 0) return;
+    MopaiCopy.saveImage(src, "mopai-image.png").then(function (res) {
+      if (res && res.ok) _toast("已保存到 " + res.path);
+      else if (res && res.cancelled) { /* 用户取消 */ }
+      else _toast("保存失败: " + ((res && res.error) || "未知错误"), true);
+    }).catch(function (err) {
+      _toast(err && err.message ? err.message : "保存失败", true);
+    });
+  }
+
+  function _exportRenderedImages() {
+    var imgs = _els.preview.querySelectorAll(IMG_SEL);
+    var uris = [];
+    for (var i = 0; i < imgs.length; i++) {
+      var src = imgs[i].getAttribute("src") || "";
+      if (src.indexOf("data:image") === 0) uris.push(src);
+    }
+    if (uris.length === 0) {
+      _toast("当前没有转图图片（开启 🖼 代码转图，或使用 ```img / ```mermaid 围栏）", true);
+      return;
+    }
+    _toast("请选择保存文件夹…（" + uris.length + " 张）");
+    MopaiCopy.exportImages(uris).then(function (res) {
+      if (res && res.ok) {
+        _toast("已导出 " + res.count + " 张 PNG 到 " + res.dir + "，可直接上传抖音图文");
+      } else if (res && res.cancelled) { /* 用户取消 */ }
+      else _toast("导出失败: " + ((res && res.error) || "未知错误"), true);
+    }).catch(function (err) {
+      _toast(err && err.message ? err.message : "导出失败", true);
+    });
+  }
+
+  function _syncCodeImgButton() {
+    if (!_els.code2ImgBtn) return;
+    var on = !!MopaiState.get("codeAsImage");
+    _els.code2ImgBtn.classList.toggle("active", on);
+    _els.code2ImgBtn.textContent = on ? "🖼 代码转图 ✓" : "🖼 代码转图";
+    // ⚙ 面板里的开关同步（面板未打开时也保持一致）
+    if (_els.mathToggle) _els.mathToggle.checked = MopaiState.get("mathAsImage") !== false;
+    if (_els.watermarkToggle) _els.watermarkToggle.checked = MopaiState.get("watermarkOn") !== false;
   }
 
   function _revealEditorLine(line) {

@@ -11,6 +11,9 @@ var MopaiState = (function () {
     markdown: '',
     themeName: '山吹',
     codeThemeId: 'github-light',
+    codeAsImage: false,       // 全局代码转图开关（抖音等平台）
+    watermarkOn: true,        // 转图卡片右下角「墨排 Mopai」水印
+    mathAsImage: true,        // LaTeX 公式 → 图片（富文本平台不支持公式，默认开启）
     imageHostToken: '',
     imageMode: 'local',
     githubToken: '',
@@ -44,6 +47,8 @@ var MopaiState = (function () {
       localStorage.setItem(LS_CURRENT, JSON.stringify({
         title: _state.title, markdown: _state.markdown,
         themeName: _state.themeName, codeThemeId: _state.codeThemeId,
+        codeAsImage: _state.codeAsImage, watermarkOn: _state.watermarkOn,
+        mathAsImage: _state.mathAsImage,
         imageHostToken: _state.imageHostToken, imageMode: _state.imageMode,
         githubToken: _state.githubToken, githubRepo: _state.githubRepo,
         cosSecretId: _state.cosSecretId, cosSecretKey: _state.cosSecretKey,
@@ -63,6 +68,9 @@ var MopaiState = (function () {
         _state.markdown = data.markdown || '';
         _state.themeName = data.themeName || '山吹';
         _state.codeThemeId = data.codeThemeId || 'github-light';
+        _state.codeAsImage = !!data.codeAsImage;
+        _state.watermarkOn = data.watermarkOn !== false;
+        _state.mathAsImage = data.mathAsImage !== false;
         _state.imageHostToken = data.imageHostToken || '';
         _state.imageMode = data.imageMode || 'local';
         _state.githubToken = data.githubToken || '';

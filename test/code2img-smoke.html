@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Mopai code2img smoke test</title>
+</head>
+<body>
+<div id="results" style="font-family:monospace;font-size:12px;white-space:pre-wrap"></div>
+<hr>
+<script src="../lib/highlight.min.js"></script>
+<script src="../lib/markdown-it.min.js"></script>
+<script src="../lib/markdown-it-footnote.min.js"></script>
+<script src="../src/state.js"></script>
+<script src="../src/themes.js"></script>
+<script src="../src/code2img.js"></script>
+<script src="../src/mermaid.js"></script>
+<script src="../src/math.js"></script>
+<script src="../src/engine.js"></script>
+<script>
+window.__tests = [];
+window.__done = false;
+
+function log(name, ok, extra) {
+  window.__tests.push({ name: name, ok: !!ok, extra: extra || '' });
+  var el = document.getElementById('results');
+  el.textContent += (ok ? 'PASS ' : 'FAIL ') + name + '  ' + (extra || '') + '\n';
+}
+
+window.runTests = function () {
+  // 用「格数对齐」生成器构造样本（CJK=2 格），保证样本自身无空格误差，
+  // 渲染后逐行右边框必须重合（否则算渲染器回归）
+  var W = 38;
+  function cells(s) {
+    var t = 0;
+    Array.from(s).forEach(function (ch) {
+      var cp = ch.codePointAt(0);
+      var w = (cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
+        (cp >= 0x3040 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+        (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xA000 && cp <= 0xA4CF) ||
+        (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF) ||
+        (cp >= 0xFE10 && cp <= 0xFE19) || (cp >= 0xFE30 && cp <= 0xFE6F) ||
+        (cp >= 0xFF00 && cp <= 0xFF60) || (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+        (cp >= 0x1F000 && cp <= 0x1FAFF) || (cp >= 0x20000 && cp <= 0x2FFFD) ||
+        (cp >= 0x30000 && cp <= 0x3FFFD);
+      t += w ? 2 : 1;
+    });
+    return t;
+  }
+  function row(content) {
+    var c = cells(content);
+    var l = Math.floor((W - c) / 2);
+    var r = W - c - l;
+    return '\u2502' + ' '.repeat(l) + content + ' '.repeat(r) + '\u2502';
+  }
+  var ascii = [
+    '\u250c' + '\u2500'.repeat(W) + '\u2510',
+    row('人生/教育目标层'),
+    '\u2514' + '\u2500'.repeat(19) + '\u252c' + '\u2500'.repeat(18) + '\u2518',
+    ' '.repeat(20) + '\u2193',
+    '\u250c' + '\u2500'.repeat(W) + '\u2510',
+    row('Learner Model'),
+    row('学生数字孪生'),
+    '\u2514' + '\u2500'.repeat(W) + '\u2518'
+  ].join('\n');
+
+  // 1. 直接渲染 ASCII 图（含 CJK + 框线 + 箭头）
+  var uri = MopaiCode2Img.renderBlock(ascii, {
+    lang: '', title: '架构图', codeThemeId: 'debug-console', primary: '#3a7bd5'
+  });
+  log('renderBlock ascii', uri && uri.indexOf('data:image/png') === 0, 'len=' + (uri ? uri.length : 'null'));
+  if (uri) {
+    var im = document.createElement('img');
+    im.src = uri;
+    im.style.width = '420px';
+    im.style.display = 'block';
+    document.body.appendChild(im);
+  }
+
+  // 2. 引擎管线：```img 强制转图
+  var theme = MopaiThemes.getTheme('山吹');
+  var html = MopaiEngine.render('```img 架构图\n' + ascii + '\n```', theme, { codeAsImage: false });
+  log('engine img fence', html.indexOf('data-codeimg') > -1 && html.indexOf('data:image/png') > -1, '');
+
+  // 3. 引擎管线：全局 codeAsImage 时普通代码块转图 + hljs 配色
+  var html2 = MopaiEngine.render('```python\nprint("hi")\n```', theme, { codeAsImage: true });
+  log('engine global', html2.indexOf('data:image/png') > -1, '');
+
+  // 4. 未开启全局、无标记的普通代码块保持文本
+  var html3 = MopaiEngine.render('```js\nlet a = 1;\n```', theme, { codeAsImage: false });
+  log('plain code stays', html3.indexOf('<pre') > -1 && html3.indexOf('data:image/png') === -1, '');
+
+  // 5. 几何重绘（L1）：自动识别线框图 → 与「强制等宽」渲染结果不同
+  var autoUri = MopaiCode2Img.renderBlock(ascii, {
+    lang: '', title: '几何重绘', codeThemeId: 'debug-console', primary: '#3a7bd5'
+  });
+  var monoUri = MopaiCode2Img.renderBlock(ascii, {
+    lang: '', title: '等宽字符', codeThemeId: 'debug-console', primary: '#3a7bd5', forceText: true
+  });
+  log('diagram redraw differs', !!autoUri && !!monoUri && autoUri !== monoUri,
+    'auto=' + (autoUri ? autoUri.length : 0) + ' mono=' + (monoUri ? monoUri.length : 0));
+  if (autoUri) {
+    var imD = document.createElement('img');
+    imD.src = autoUri; imD.style.width = '520px'; imD.style.display = 'block';
+    document.body.appendChild(imD);
+  }
+  // 普通代码不得被误判为图例
+  var codeOnly = MopaiCode2Img.renderBlock('def f(x):\n    return x + 1', {
+    lang: 'python', title: '非图例', codeThemeId: 'debug-console', primary: '#3a7bd5'
+  });
+  var codeMono = MopaiCode2Img.renderBlock('def f(x):\n    return x + 1', {
+    lang: 'python', title: '非图例', codeThemeId: 'debug-console', primary: '#3a7bd5', forceText: true
+  });
+  log('code not misdetected', codeOnly === codeMono, '');
+
+  // 6. Mermaid 异步渲染（懒加载 lib/mermaid.min.js）
+  var holder = document.createElement('div');
+  document.body.appendChild(holder);
+  var html4 = MopaiEngine.render('```mermaid\nflowchart LR\n  A[开始] --> B{判断}\n  B -->|是| C[结束]\n  B -->|否| A\n```', theme, {});
+  holder.innerHTML = html4;
+
+  // 7. 公式转图（懒加载 lib/mathjax-tex-svg.js）
+  var mathHolder = document.createElement('div');
+  document.body.appendChild(mathHolder);
+  var mathHtml = MopaiEngine.render(
+    '行内 $a \\ne 0$ 与块级：\n\n$$\n\\int_0^1 x^2\\,dx = \\frac13\n$$\n\n价格 $199 不应误判。',
+    theme, {});
+  mathHolder.innerHTML = mathHtml;
+  var placeholders = mathHolder.querySelectorAll('[data-math]').length;
+
+  MopaiMermaid.renderAllIn(holder, { primary: '#3a7bd5' }).then(function () {
+    var img = holder.querySelector('img[data-mermaid-img]');
+    log('mermaid render', !!img && (img.getAttribute('src') || '').indexOf('data:image/png') === 0,
+      img ? 'len=' + img.getAttribute('src').length : 'no img');
+    if (img && img.getAttribute('src').length > 0) {
+      var im2 = document.createElement('img');
+      im2.src = img.getAttribute('src');
+      im2.style.width = '420px';
+      im2.style.display = 'block';
+      document.body.appendChild(im2);
+    }
+    return MopaiMath.renderAllIn(mathHolder, { color: '#333333', fontPx: 16 });
+  }).then(function () {
+    var inline = mathHolder.querySelectorAll('img[data-math-img="inline"]').length;
+    var display = mathHolder.querySelectorAll('img[data-math-img="display"]').length;
+    var left = mathHolder.querySelectorAll('[data-math]').length;
+    var errs = mathHolder.querySelectorAll('[data-math-error]').length;
+    log('math render', placeholders === 2 && inline === 1 && display === 1 && left === 0 && errs === 0,
+      'placeholders=' + placeholders + ' inline=' + inline + ' display=' + display + ' left=' + left + ' err=' + errs);
+    var priceKept = mathHolder.textContent.indexOf('$199') > -1;
+    log('math price guard', priceKept, '');
+    var mimg = mathHolder.querySelector('img[data-math-img="display"]');
+    if (mimg) {
+      var im3 = document.createElement('img');
+      im3.src = mimg.getAttribute('src');
+      im3.style.width = '300px';
+      im3.style.display = 'block';
+      document.body.appendChild(im3);
+    }
+    window.__done = true;
+  }).catch(function (e) {
+    log('mermaid/math render', false, e.message);
+    window.__done = true;
+  });
+};
+</script>
+</body>
+</html>
