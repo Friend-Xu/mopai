@@ -14,6 +14,9 @@ var MopaiMath = (function () {
   var _cache = {};                       // 公式指纹 → {uri, width, height, valign}
   var _CANDIDATES = ['lib/mathjax-tex-svg.js', '../lib/mathjax-tex-svg.js'];
   var DEFAULT_SCALE = 3;                 // 导出 3x，公式细节多
+  // 展示公式最大宽度（1x px）。公众号正文栏约 677px，抖音更窄；超宽公式会被 max-width:100%
+  // 缩到看不清（长等式尤其明显）→ 先按顶层运算符折行成 aligned 多行公式（仍然只占 1 张图）
+  var MAX_DISPLAY_W = 620;
 
   function ensureLoaded() {
     if (_ready) return Promise.resolve();
@@ -105,6 +108,112 @@ var MopaiMath = (function () {
     });
   }
 
+  /** 排版一次（不涉及光栅化）：返回尺寸 px（按 fontPx 换算） */
+  function _render(tex, display, color, fontPx) {
+    var node = window.MathJax.tex2svg(tex, { display: display, em: 16, ex: 8, container: false });
+    var html = (node && node.outerHTML) ? node.outerHTML : String(node);
+    var svg = _extractSvg(html, color);
+    var ex = _sizeEx(svg);
+    var k = fontPx / 16;
+    return {
+      svg: svg,
+      wPx: Math.max(4, ex.w * 8 * k),
+      hPx: Math.max(4, ex.h * 8 * k),
+      valignPx: _valignEx(svg) * 8 * k
+    };
+  }
+
+  // 顶层运算符：折行点（{} 内部、\left…\right 内部一律不动）
+  var _TOP_OPS = ['\\pm', '\\mp', '\\times', '\\cdot', '\\div', '\\to', '\\rightarrow',
+    '\\Rightarrow', '\\ge', '\\geq', '\\le', '\\leq', '\\approx', '\\ne', '\\neq', '\\equiv'];
+
+  /** 按顶层运算符把公式切成「操作数」单元，运算符归属它后面的操作数（'= Knowledge'、'+ Capability'） */
+  function _splitTop(tex) {
+    var units = [], buf = '', pending = '', depth = 0, lr = 0, i = 0;
+    function flush() {
+      var t = buf.trim();
+      buf = '';
+      if (!t) return;
+      units.push(pending ? (pending + ' ' + t) : t);
+      pending = '';
+    }
+    while (i < tex.length) {
+      var c = tex.charAt(i);
+      if (c === '\\') {
+        var m = /^\\([a-zA-Z]+|.)/.exec(tex.slice(i));
+        var cmd = m ? m[0] : '\\';
+        var name = cmd.slice(1);
+        if (name === 'left') lr++;
+        else if (name === 'right') lr = Math.max(0, lr - 1);
+        else if (name === '\\' || name === 'cr') { buf += ' '; i += cmd.length; continue; }
+        else if (!depth && !lr && _TOP_OPS.indexOf(cmd) >= 0) {
+          if (!buf.trim()) { buf += cmd; i += cmd.length; continue; }   // 一元/行首：并进操作数
+          flush();
+          pending = cmd;
+          i += cmd.length;
+          continue;
+        }
+        buf += cmd;
+        i += cmd.length;
+        continue;
+      }
+      if (c === '{') depth++;
+      else if (c === '}') depth = Math.max(0, depth - 1);
+      else if (c === '(' || c === '[') lr++;
+      else if (c === ')' || c === ']') lr = Math.max(0, lr - 1);
+      else if (!depth && !lr && (c === '=' || c === '+' || c === '-')) {
+        if (!buf.trim()) { buf += c; i++; continue; }                   // 一元 +/-：并进操作数
+        flush();
+        pending = c;
+        i++;
+        continue;
+      }
+      buf += c;
+      i++;
+    }
+    flush();
+    return units;
+  }
+
+  /**
+   * 超宽展示公式 → aligned 多行（贪心装行，尽量少行且不超 MAX_DISPLAY_W）。
+   * 有顶层 `=` 时以等号对齐，续行以运算符开头；没有就左对齐续行。折不出 2 行则返回 null。
+   */
+  function _wrapDisplayTex(tex, color, fontPx) {
+    var units = _splitTop(tex);
+    if (units.length < 2 || units.length > 20) return null;
+    function w(t) { return _render(t, true, color, fontPx).wPx; }
+    var head = '', rest = units;
+    if (!/^[=+\-]/.test(units[0])) {
+      for (var i = 1; i < units.length; i++) {
+        if (/^[=+\-]/.test(units[i])) {
+          if (units[i].charAt(0) === '=') {
+            head = units.slice(0, i).join(' ') + ' ={} & ';
+            rest = [units[i].replace(/^=\s*/, '')].concat(units.slice(i + 1));
+          }
+          break;
+        }
+      }
+    }
+    var lines = [], cur = rest[0];
+    // 量宽度时必须去掉对齐制表符 &（在 aligned 环境之外 & 会让 MathJax 报错 → 量出来的宽度是错的）
+    var headM = head.replace(/&\s*/g, ' ');
+    for (var j = 1; j < rest.length; j++) {
+      var cand = cur + ' ' + rest[j];
+      if (w(headM + cand) <= MAX_DISPLAY_W) cur = cand;
+      else { lines.push(cur); cur = rest[j]; }
+    }
+    lines.push(cur);
+    if (lines.length < 2) return null;
+    // 只有存在顶层 `=`（head 里已经放好 `={}&`）时才用 & 对齐续行；
+    // 否则 & 会新开一列，反而把续行推到右边（宽度不减反增）
+    var out = [];
+    for (var q = 0; q < lines.length; q++) {
+      out.push(q === 0 ? (head + lines[q]) : ((head ? '& ' : '') + lines[q]));
+    }
+    return '\\begin{aligned} ' + out.join(' \\\\ ') + ' \\end{aligned}';
+  }
+
   /**
    * 单个公式 → PNG
    * @param {string} tex — LaTeX 源码（不含 $ 定界符）
@@ -121,23 +230,21 @@ var MopaiMath = (function () {
     if (_cache[key]) return Promise.resolve(_cache[key]);
 
     return ensureLoaded().then(function () {
-      var node = window.MathJax.tex2svg(tex, { display: display, em: 16, ex: 8, container: false });
-      var html = (node && node.outerHTML) ? node.outerHTML : String(node);
-      var svg = _extractSvg(html, color);
-      var ex = _sizeEx(svg);
-      var valignEx = _valignEx(svg);
-      // ex → px：MathJax 默认 ex = 8px（em=16px），按文章字号等比缩放
-      var k = fontPx / 16;
-      var wPx = Math.max(4, ex.w * 8 * k);
-      var hPx = Math.max(4, ex.h * 8 * k);
-      var valignPx = valignEx * 8 * k;
-      var raster = _setSvgSize(svg, Math.round(wPx * scale), Math.round(hPx * scale));
-      return _rasterize(raster, wPx * scale, hPx * scale).then(function (uri) {
+      var r = _render(tex, display, color, fontPx);
+      // 超宽展示公式：折行重排（仍然是一张图，但不会被缩到看不清）
+      if (!display || r.wPx <= MAX_DISPLAY_W) return r;
+      var wrapped = _wrapDisplayTex(tex, color, fontPx);
+      if (!wrapped) return r;
+      var r2 = _render(wrapped, true, color, fontPx);
+      return r2.wPx < r.wPx ? r2 : r;
+    }).then(function (r) {
+      var raster = _setSvgSize(r.svg, Math.round(r.wPx * scale), Math.round(r.hPx * scale));
+      return _rasterize(raster, r.wPx * scale, r.hPx * scale).then(function (uri) {
         var res = {
           uri: uri,
-          width: Math.round(wPx * 10) / 10,
-          height: Math.round(hPx * 10) / 10,
-          valign: Math.round(valignPx * 100) / 100
+          width: Math.round(r.wPx * 10) / 10,
+          height: Math.round(r.hPx * 10) / 10,
+          valign: Math.round(r.valignPx * 100) / 100
         };
         if (Object.keys(_cache).length > 200) _cache = {};
         _cache[key] = res;
@@ -190,8 +297,11 @@ var MopaiMath = (function () {
                   img.setAttribute('data-line', el.getAttribute('data-line'));
                 }
                 if (display) {
+                  // 必须显式给宽度：PNG 是 3x 像素，不给宽度浏览器就按 3 倍尺寸显示，
+                  // 再被 max-width:100% 压回栏宽 → 长公式被压成看不清的小字
                   img.setAttribute('style',
-                    'display:block;margin:14px auto;max-width:100%;height:auto;');
+                    'display:block;margin:14px auto;width:' + Math.ceil(res.width) +
+                    'px;max-width:100%;height:auto;');
                 } else {
                   img.setAttribute('style',
                     'vertical-align:' + res.valign + 'px;max-width:100%;');

@@ -625,8 +625,10 @@ var MopaiCode2Img = (function () {
   var CHAIN_SUB_STEP = 18;   // 多行节点的行距（首行标题 + 次行说明）
 
   function _cellsText(s) {
+    _ensureMeasure();
+    var ctx = _ctx || _measureCtx, cw = _ctx ? _cellW : _measureCellW;
     var chars = Array.from(s), n = 0;
-    for (var i = 0; i < chars.length; i++) n += _cellOf(chars[i], _ctx, _cellW);
+    for (var i = 0; i < chars.length; i++) n += _cellOf(chars[i], ctx, cw);
     return n;
   }
 
@@ -744,6 +746,76 @@ var MopaiCode2Img = (function () {
   function _isPlainLang(lang) {
     if (!lang) return true;
     return /^(text|plaintext|plain|txt|none|mono|raw|diagram|img)$/i.test(lang);
+  }
+
+  // ---------- 呈现方式判定（哪些内容「必须」占一张图片配额）----------
+  // 抖音文章的硬约束：图片不能超过 30 张。只有排版会被富文本编辑器毁掉的内容才值得转图：
+  //   diagram / chain —— 空间结构（ASCII 对齐会被压空格毁掉）
+  //   code            —— 等宽 + 缩进 + 高亮
+  //   text            —— 纯文本 / 标签列表：直接排成带内联样式的段落即可，不占配额
+  var _measureCtx = null, _measureCellW = 0;
+
+  function _ensureMeasure() {
+    if (_measureCtx) return;
+    var c = document.createElement('canvas').getContext('2d');
+    c.font = FONT_SIZE + 'px ' + FONT_STACK;
+    _measureCtx = c;
+    _measureCellW = c.measureText('M').width || Math.round(FONT_SIZE * 0.55);
+  }
+
+  /**
+   * 这个块该怎么呈现
+   * @returns {'code'|'diagram'|'chain'|'text'}
+   */
+  function classify(code, lang) {
+    if (!_isPlainLang(lang)) return 'code';
+    if (_detectDiagram(code)) return 'diagram';
+    if (_detectChain(code)) return 'chain';
+    return 'text';
+  }
+
+  function _esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /**
+   * 纯文本块的替身排版（不占图片配额，公众号/抖音都能直接排版）
+   * 短标签列表 → 主题色圆点列表；单行短标签 → 主题色竖条 + 加粗；长句 → 普通段落
+   */
+  function _textBlockHtml(code, o, line) {
+    var list = _detectList(code);
+    var fs = (o && o.fontPx) || 16;
+    var color = (o && o.textColor) || '#333333';
+    var primary = (o && o.primary) || color;
+    var dl = line ? ' data-line="' + _esc(line) + '"' : '';
+    var body = 'font-size:' + fs + 'px;line-height:1.8;color:' + color + ';';
+    var out = [], i, it;
+    if (list && list.single) {
+      return '<p' + dl + ' style="margin:14px 0;' + body + 'font-weight:600">' +
+        '<span style="color:' + primary + '">\u258D</span> ' +
+        _esc(list.items[0].text) + '</p>';
+    }
+    if (list) {
+      for (i = 0; i < list.items.length; i++) {
+        it = list.items[i];
+        if (it.gap) {
+          if (out.length) out[out.length - 1] = out[out.length - 1].replace('margin:6px 0;', 'margin:6px 0 18px;');
+          continue;
+        }
+        out.push('<p' + dl + ' style="margin:6px 0;' + body + '">' +
+          '<span style="color:' + primary + '">\u2022</span> ' + _esc(it.text) + '</p>');
+      }
+      return out.join('');
+    }
+    var lines = _normalizeLines(code);
+    for (i = 0; i < lines.length; i++) {
+      var t = lines[i].replace(/\s+$/, '');
+      if (!t.trim()) continue;
+      out.push('<p' + dl + ' style="margin:12px 0;' + body + '">' + _esc(t) + '</p>');
+    }
+    return out.join('');
   }
 
   /** 代码味道（含这些字符就按代码/技术文本处理，不做列表化） */
@@ -1062,9 +1134,9 @@ var MopaiCode2Img = (function () {
   }
 
   /**
-   * 处理 HTML：把所有 pre[data-codeimg] 替换为渲染图片
+   * 处理 HTML：把所有 pre[data-codeimg] 换成渲染图片；纯文本块换成排版后的段落
    * @param {string} html
-   * @param {object} opts — { codeThemeId, primary, watermark }
+   * @param {object} opts — { codeThemeId, primary, watermark, textAsImage, textColor, fontPx }
    */
   function process(html, opts) {
     var o = opts || {};
@@ -1078,8 +1150,20 @@ var MopaiCode2Img = (function () {
         if (pre.parentNode) pre.parentNode.removeChild(pre);
         continue;
       }
+      var lang = pre.getAttribute('data-lang') || '';
+      var forced = pre.getAttribute('data-force') === '1' ||
+        pre.getAttribute('data-diagram') === '1' ||
+        pre.getAttribute('data-mono') === '1';
+      // 纯文本 / 标签列表：排版就够，不必占一张图片（抖音文章图片上限 30 张）
+      if (!forced && !o.textAsImage && classify(code, lang) === 'text') {
+        var tmp = document.createElement('div');
+        tmp.innerHTML = _textBlockHtml(code, o, pre.getAttribute('data-line') || '');
+        while (tmp.firstChild) pre.parentNode.insertBefore(tmp.firstChild, pre);
+        pre.parentNode.removeChild(pre);
+        continue;
+      }
       var uri = renderBlock(code, {
-        lang: pre.getAttribute('data-lang') || '',
+        lang: lang,
         title: pre.getAttribute('data-title') || '',
         codeThemeId: o.codeThemeId,
         primary: o.primary,
@@ -1108,6 +1192,7 @@ var MopaiCode2Img = (function () {
   return {
     renderBlock: renderBlock,
     process: process,
+    classify: classify,
     clearCache: clearCache
   };
 })();

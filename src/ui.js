@@ -38,6 +38,7 @@ var MopaiUI = (function () {
     _els.themeSelect = document.getElementById("theme-select");
     _els.codeThemeSelect = document.getElementById("code-theme-select");
     _els.code2ImgBtn = document.getElementById("btn-code2img");
+    _els.imgCount = document.getElementById("img-count");
     _els.mobileToggle = document.getElementById("mobile-toggle");
     _els.copyBtn = document.getElementById("btn-copy");
     _els.fileBtn = document.getElementById("btn-file");
@@ -76,6 +77,7 @@ var MopaiUI = (function () {
     _els.menuExportImages = document.getElementById("menu-export-images");
     _els.watermarkToggle = document.getElementById("watermark-toggle");
     _els.mathToggle = document.getElementById("math-toggle");
+    _els.textImgToggle = document.getElementById("textimg-toggle");
     _els.phoneFrame = document.getElementById("phone-frame");
     _els.phoneScreen = document.getElementById("phone-screen");
     _els.refreshFilesBtn = document.getElementById("btn-refresh-files");
@@ -142,6 +144,16 @@ var MopaiUI = (function () {
         _toast(_els.mathToggle.checked
           ? "公式将渲染为图片（可粘贴到公众号/抖音）"
           : "公式转图片已关闭：预览显示 LaTeX 源码");
+      });
+    }
+    if (_els.textImgToggle) {
+      _els.textImgToggle.addEventListener("change", function () {
+        MopaiState.set("textAsImage", _els.textImgToggle.checked);
+        if (typeof MopaiCode2Img !== "undefined") MopaiCode2Img.clearCache();
+        _updatePreview();
+        _toast(_els.textImgToggle.checked
+          ? "纯文本也转图：所有块都以图片卡片显示（注意抖音文章图片上限 30 张）"
+          : "纯文本改为直接排版：只有线框图/流程图/代码/公式占图片配额");
       });
     }
     _els.mobileToggle.addEventListener("click", function () {
@@ -633,6 +645,7 @@ var MopaiUI = (function () {
         ? "公式图片：单击复制 · 双击保存 PNG"
         : "单击复制图片 · 双击保存 PNG");
     }
+    _updateImgCount();
   }
 
   function _debouncedPreview() {
@@ -843,6 +856,17 @@ var MopaiUI = (function () {
     // ⚙ 面板里的开关同步（面板未打开时也保持一致）
     if (_els.mathToggle) _els.mathToggle.checked = MopaiState.get("mathAsImage") !== false;
     if (_els.watermarkToggle) _els.watermarkToggle.checked = MopaiState.get("watermarkOn") !== false;
+    if (_els.textImgToggle) _els.textImgToggle.checked = !!MopaiState.get("textAsImage");
+  }
+
+  // 图片配额提示：抖音「文章」最多 30 张图，超了会发不出去
+  var IMG_LIMIT = 30;
+  function _updateImgCount() {
+    if (!_els.imgCount || !_els.preview) return;
+    var n = _els.preview.querySelectorAll("img").length;
+    if (!n) { _els.imgCount.textContent = ""; return; }
+    _els.imgCount.textContent = "图片 " + n + "/" + IMG_LIMIT + (n > IMG_LIMIT ? " ⚠ 超限" : "");
+    _els.imgCount.style.color = n > IMG_LIMIT ? "#d9534f" : "#aaa";
   }
 
   function _revealEditorLine(line) {

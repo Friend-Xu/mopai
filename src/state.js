@@ -12,6 +12,7 @@ var MopaiState = (function () {
     themeName: '山吹',
     codeThemeId: 'github-light',
     codeAsImage: false,       // 全局代码转图开关（抖音等平台）
+    textAsImage: false,       // 纯文本/标签列表也转图（默认 false：直接排版，省抖音 30 张图片配额）
     watermarkOn: true,        // 转图卡片右下角「墨排 Mopai」水印
     mathAsImage: true,        // LaTeX 公式 → 图片（富文本平台不支持公式，默认开启）
     imageHostToken: '',
@@ -48,6 +49,7 @@ var MopaiState = (function () {
         title: _state.title, markdown: _state.markdown,
         themeName: _state.themeName, codeThemeId: _state.codeThemeId,
         codeAsImage: _state.codeAsImage, watermarkOn: _state.watermarkOn,
+        textAsImage: _state.textAsImage,
         mathAsImage: _state.mathAsImage,
         imageHostToken: _state.imageHostToken, imageMode: _state.imageMode,
         githubToken: _state.githubToken, githubRepo: _state.githubRepo,
@@ -69,6 +71,7 @@ var MopaiState = (function () {
         _state.themeName = data.themeName || '山吹';
         _state.codeThemeId = data.codeThemeId || 'github-light';
         _state.codeAsImage = !!data.codeAsImage;
+        _state.textAsImage = !!data.textAsImage;
         _state.watermarkOn = data.watermarkOn !== false;
         _state.mathAsImage = data.mathAsImage !== false;
         _state.imageHostToken = data.imageHostToken || '';

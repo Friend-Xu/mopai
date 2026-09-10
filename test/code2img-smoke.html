@@ -221,8 +221,11 @@ window.runTests = function () {
       im3.style.display = 'block';
       document.body.appendChild(im3);
     }
-    // ---- 10~13：像素级回归（空白卡片 / 误判 / 错位线框 / 弱箭头吞字母）----
+    // ---- 10~16：像素级回归（空白卡片 / 误判 / 错位线框 / 弱箭头吞字母）----
     return _pixelChecks();
+  }).then(function () {
+    // ---- 17~22：呈现方式与图片配额（抖音文章图片上限 30 张）----
+    return _renderChecks(theme);
   }).then(function () {
     window.__done = true;
   }).catch(function (e) {
@@ -331,6 +334,42 @@ function _pixelChecks() {
     log('label keeps letters (v)', band.w > expect * 0.88 && band.w < expect * 1.12,
       'bbox=' + band.w + ' expect=' + Math.round(expect));
     show(boxUri, 320);
+  });
+}
+
+/**
+ * 呈现方式与图片配额断言（抖音文章图片上限 30 张，纯文本不该占配额）
+ * 17 纯文本块不转图（排版成段落），但 ```img 围栏仍然强制转图
+ * 18 代码块仍然转图（等宽/缩进/hljs 高亮必须保真）
+ * 19 展示公式必须带 CSS 宽度（PNG 是 3x 像素，不给宽度浏览器按 3 倍显示再被 max-width 压小）
+ * 20 超宽展示公式自动折行（宽度降到栏宽内、变成多行）
+ * 21 短公式不受折行影响
+ */
+function _renderChecks(theme) {
+  var WIDE = '\\text{Human Development}\n=\nKnowledge\n+\nCapability\n+\nAgency\n+\nMotivation\n+\nHealth\n+\nCreativity\n+\nSocialization\n+\nValues';
+  var txt = 'AI 替学生学习';
+  var htmlText = MopaiEngine.render('```text\n' + txt + '\n```', theme, { codeAsImage: true });
+  var htmlForce = MopaiEngine.render('```img\n' + txt + '\n```', theme, { codeAsImage: true });
+  var htmlCode = MopaiEngine.render('```python\nprint("hi")\n```', theme, { codeAsImage: true });
+  log('plain text: no image', htmlText.indexOf('<img') === -1 && htmlText.indexOf(txt) > -1, '');
+  log('```img forces image', htmlForce.indexOf('data:image/png') > -1, '');
+  log('code still becomes image', htmlCode.indexOf('data:image/png') > -1, '');
+
+  var holder = document.createElement('div');
+  document.body.appendChild(holder);
+  holder.innerHTML = MopaiEngine.render('$$\nE = mc^2\n$$', theme, {});
+  return MopaiMath.renderAllIn(holder, { color: '#333333', fontPx: 16 }).then(function () {
+    var img = holder.querySelector('img[data-math-img="display"]');
+    var style = img ? (img.getAttribute('style') || '') : '';
+    log('display formula has css width', /width:\s*\d+px/.test(style), style.slice(0, 58));
+    return MopaiMath.toPng(WIDE, { display: true, color: '#333333', fontPx: 16 });
+  }).then(function (r) {
+    log('wide formula wraps', r.width <= 640 && r.height > 30,
+      'w=' + Math.round(r.width) + ' h=' + Math.round(r.height));
+    return MopaiMath.toPng('E = mc^2', { display: true, color: '#333333', fontPx: 16 });
+  }).then(function (r) {
+    log('short formula untouched', r.width < 120 && r.height < 30,
+      'w=' + Math.round(r.width) + ' h=' + Math.round(r.height));
   });
 }
 </script>

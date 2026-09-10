@@ -240,6 +240,7 @@ body {
     </div>
   </div>
   <button id="btn-copy" class="primary">📋 复制到公众号</button>
+  <span class="char-count" id="img-count"></span>
   <span class="char-count" id="char-count">0 字</span>
   <input type="file" id="file-input" accept=".md,.markdown,.txt">
 </div>
@@ -259,6 +260,13 @@ body {
     <div>
       <div class="mode-title">转图水印</div>
       <div class="mode-desc">代码/流程图卡片右下角显示「墨排 Mopai」小字水印</div>
+    </div>
+  </label>
+  <label class="mode-option" style="margin-bottom:14px">
+    <input type="checkbox" id="textimg-toggle" style="margin-top:3px">
+    <div>
+      <div class="mode-title">纯文本也转图</div>
+      <div class="mode-desc">默认关闭：纯文本/标签列表直接排版成段落，不占图片配额（抖音文章图片上限 30 张）。开启后与线框图一样渲染成图片卡片；单个围栏用 ```img 可强制转图</div>
     </div>
   </label>
   <div class="settings-sub">图床设置</div>

@@ -81,14 +81,25 @@ hljs → markdownit → markdownitFootnote → state → themes → wechat-theme
   原文空行保留为分组间距，原文自带的 `- ` 标记会被换成设计圆点）；单行短标签 → 圆角标签条。
   判定见 `_detectList()`：含框线字符、箭头行、代码味道（`{}()[];=<>` `//` `::` `=>` `|` `\`）、
   任何一行超过 24 格、条数不在 1~12 → 不转，保持等宽卡片
-- **以上三种设计重绘只对「非代码语言」的围栏生效**（`_isPlainLang()`：```text/```plaintext/
-  ```mono… 或无 info）；```` ```python ```` 这类真代码块永远走等宽 + hljs 高亮。
-  `docs/测试md文件.md` 全文 34 个 ```text 块现在全部是设计图，0 个等宽卡片
+- **呈现方式判定（决定要不要占图片配额）**：`MopaiCode2Img.classify()` 返回
+  `code`（真代码块：等宽/缩进/高亮必须保真）| `diagram`（线框图）| `chain`（流程链）|
+  `text`（纯文本 / 标签列表 → **不转图**，由 `_textBlockHtml()` 排成带内联样式的段落：
+  主题色圆点列表、单行标签用主色竖条 ▍+ 加粗、长句用普通段落）。
+  **抖音「文章」图片上限 30 张**，纯文本没必要占配额，且段落文本还能被搜索/编辑；
+  工具栏实时显示 `图片 N/30`（超限变红）。逃生开关：```` ```img ```` 强制该块转图，
+  ⚙ 面板「纯文本也转图」（state `textAsImage`，默认关）恢复全部转卡片的旧行为。
+  三种设计重绘（线框/流程链/列表标签）只对「非代码语言」围栏生效（`_isPlainLang()`）；
+  `docs/测试md文件.md`：34 个 ```text 块 → 17 个转图 + 17 个排版成段落，
+  整篇图片 43 → 26 张（代码 17 + 公式 9），低于抖音 30 张上限
 - **Mermaid**：```` ```mermaid 标题… ```` → 懒加载 lib/mermaid.min.js → SVG → PNG（2x）
 - **公式**：`$…$` / `\(…\)` 行内、`$$…$$` / `\[…\]` 块级 → 懒加载 lib/mathjax-tex-svg.js
   （tex-svg 输出自带字形 path，不依赖系统字体）→ SVG → PNG（3x）。
   行内公式按 MathJax 的 vertical-align 换算成 `vertical-align: Npx` 与正文基线对齐；
   颜色/字号跟随文章主题正文（`_mathOpts()`）；`$199` 这类价格不会误判（闭合 `$` 后不接数字）。
+  **展示公式防缩小（两道）**：① 展示图必须写死 CSS 宽度——PNG 是 3x 像素，不写宽度浏览器就按
+  3 倍尺寸显示、再被 `max-width:100%` 压回栏宽，长公式会被压成看不清的小字；
+  ② 宽度超过 `MAX_DISPLAY_W`(620px) 的展示公式，按顶层运算符贪心折行成 `aligned` 多行
+  （仍是一张图，有 `=` 时以等号对齐，`{}`、`\left…\right` 内部绝不折行；折不出 2 行就保持原样）。
   state `mathAsImage`（⚙ 面板可关，关闭则显示 LaTeX 源码）
 
 **对齐原理**（code2img.js）：不依赖字体度量，按字符网格绝对定位——
@@ -161,10 +172,10 @@ runtime\python.exe test\cdp_eval.py "document.title"
 无自动化测试套件。`test/sample-article/`（git 忽略）是端到端验证用的样例文章。
 `test/code2img-smoke.html`（浏览器打开后执行 `runTests()`，或 `python -m http.server` 后访问；
 等待 `window.__done === true`，结果在 `window.__tests` / `#results`）：
-自跑 18 项断言 —— 前 9 项：等宽转图（CJK 对齐 + hljs 配色）、```img 围栏、全局开关、
+自跑 24 项断言 —— 前 9 项：等宽转图（CJK 对齐 + hljs 配色）、```img 围栏、全局开关、
 未标记代码块保持文本、几何重绘结果与等宽渲染不同、普通代码不被误判为图例、
 Mermaid 懒加载渲染、公式（行内/块级）转图、`$199` 价格不误判。
-后 9 项是**像素级 / 形态**断言（只判断「dataURI 非空」会漏掉整块画成底色的空白卡片）：
+后 15 项是**像素级 / 形态 / 配额**断言（只判断「dataURI 非空」会漏掉整块画成底色的空白卡片）：
 - 区域内「非底色像素」（墨迹）计数：英文单行标签、中文 + ↓ 流程卡都必须有字
 - `cjk flow → chain`、`plain list → list card`、`single label → chip`：三种形态都必须被重绘
   （渲染结果与 `forceText` 不同）；`code-ish text stays mono`：含 `=`/`()` 的文本必须**不**重绘
@@ -172,6 +183,10 @@ Mermaid 懒加载渲染、公式（行内/块级）转图、`$199` 价格不误�
 - `tree has no boxes`：统计「节点填充色」像素——树状图必须为 0，且对照组（单框样本）
   必须 >2000，否则断言是空转
 - `label keeps letters (v)`：框内标签墨迹宽度 ≈ `measureText` 预期宽度 ±12%（字母没被当箭头吞掉）
+- `plain text: no image`：```text 纯文本必须**不**出 `<img>`（省抖音 30 张配额）；
+  ```` ```img ```` 仍然强制转图；`code still becomes image`：代码块仍然转图
+- `display formula has css width`：展示公式必须带 `width: Npx`（否则 3x PNG 按 3 倍显示再被压小）
+- `wide formula wraps`（宽度 ≤640 且变成多行）、`short formula untouched`
 页面内附带渲染结果图便于肉眼检查对齐与观感。
-验证真实文章：`docs/测试md文件.md`（34 张代码图逐张统计墨迹，0 张空白、渲染 245ms；
-9 张公式图无残留占位；34 个 ```text 块全部走设计重绘，0 个等宽卡片）。
+验证真实文章：`docs/测试md文件.md`（整篇 26 张图 = 代码 17 + 公式 9，低于抖音 30 张上限；
+17 个纯文本块排成段落；图片逐张统计墨迹 0 张空白；9 张公式图无残留占位）。

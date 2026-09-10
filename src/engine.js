@@ -208,6 +208,7 @@ var MopaiEngine = (function () {
             '" data-title="' + md.utils.escapeHtml(m.title) +
             '"' + (m.diagram ? ' data-diagram="1"' : '') +
             (m.mono ? ' data-mono="1"' : '') +
+            (meta ? ' data-force="1"' : '') +   // 显式围栏（```img/```diagram/```mono）一定转图
             '><code>' + md.utils.escapeHtml(t.content) + '</code></pre>';
         }
         return rule.call(this, tokens, idx, options, env, self);
@@ -484,7 +485,10 @@ var MopaiEngine = (function () {
       html = MopaiCode2Img.process(html, {
         codeThemeId: codeThemeId,
         primary: (theme && theme.primary) || null,
-        watermark: _watermark
+        watermark: _watermark,
+        textAsImage: !!(typeof MopaiState !== 'undefined' && MopaiState.get && MopaiState.get('textAsImage')),
+        textColor: (theme && theme.body && theme.body.color) || '#333333',
+        fontPx: parseFloat(theme && theme.body && theme.body.fontSize) || 16
       });
     }
 
