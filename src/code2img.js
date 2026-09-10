@@ -622,6 +622,7 @@ var MopaiCode2Img = (function () {
   var CHAIN_GAP = 28;
   var CHAIN_PAD_X = 16;
   var CHAIN_MIN_W = 96;
+  var CHAIN_SUB_STEP = 18;   // 多行节点的行距（首行标题 + 次行说明）
 
   function _cellsText(s) {
     var chars = Array.from(s), n = 0;
@@ -630,74 +631,88 @@ var MopaiCode2Img = (function () {
   }
 
   /**
-   * 识别竖向流程链：行序列必须是「标签 / 箭头行」严格交替、首尾都是标签。
-   * 保守：行数不足、含框线字符、含长句 → 返回 null（保持等宽卡片，绝不误画散文）。
+   * 识别竖向流程链：节点（一或多行标签）与纯箭头行严格交替，箭头数 = 节点数 - 1。
+   * 多行节点是 LLM 常见写法（`初期` + `学生依赖 AI` 合成一个节点）。
+   * 保守：行数不足、含框线字符、箭头开头/结尾/连续、标签超过 40 格 → 返回 null。
    */
   function _detectChain(code) {
     var lines = _normalizeLines(code);
     if (lines.length < 3) return null;
-    var seq = [], dir = 'd', i, t;
+    var nodes = [], arrows = 0, cur = null, pending = false, dir = 'd', i, t;
     for (i = 0; i < lines.length; i++) {
       t = lines[i].trim();
-      if (!t) continue;                                  // 空行（分隔用）忽略
-      if (t.length === 1 && '↓↑→←▼▲►◄'.indexOf(t) >= 0) { seq.push({ arrow: t }); continue; }
-      if (/[─━│┃┌┏┐┓└┗┘┛├┣┤┫┬┳┴┻┼╋╭╮╰╯═║]/.test(t)) return null;   // 线框 → 交给几何重绘
-      if (/^[+\-=~|*#]+$/.test(t)) return null;          // 纯 ASCII 分隔线
-      if (_cellsText(t) > 24) return null;               // 长句不当标签
-      seq.push({ text: t });
-    }
-    if (seq.length < 3 || seq.length % 2 === 0) return null;
-    for (i = 0; i < seq.length; i++) {
-      if (i % 2 === 0) {
-        if (seq[i].arrow) return null;
-      } else {
-        if (!seq[i].arrow) return null;
-        if ('↑▲←◄'.indexOf(seq[i].arrow) >= 0) dir = 'u';  // 逆向链（结果在前）
+      if (!t) continue;                                       // 空行（分隔用）忽略
+      if (t.length === 1 && '↓↑→←▼▲►◄'.indexOf(t) >= 0) {
+        if (!cur || pending) return null;                      // 箭头开头 / 连续箭头 → 不是链
+        if ('↑▲←◄'.indexOf(t) >= 0) dir = 'u';
+        pending = true;
+        arrows++;
+        continue;
       }
+      if (/[─━│┃┌┏┐┓└┗┘┛├┣┤┫┬┳┴┻┼╋╭╮╰╯═║]/.test(t)) return null;   // 线框 → 交给几何重绘
+      if (/^[+\-=~|*#]+$/.test(t)) return null;                // 纯 ASCII 分隔线
+      if (_cellsText(t) > 40) return null;                     // 长句不当节点
+      if (pending) { pending = false; cur = null; }
+      if (!cur) { cur = { lines: [] }; nodes.push(cur); }
+      cur.lines.push(t);
     }
-    var labels = [];
-    for (i = 0; i < seq.length; i += 2) labels.push(seq[i].text);
-    return { labels: labels, dir: dir };
+    if (pending || nodes.length < 2 || arrows !== nodes.length - 1) return null;
+    return { nodes: nodes, dir: dir };
   }
 
-  /** 节点尺寸：宽度按标签实测宽度（比例字体）撑开，所有节点共用一条中轴 */
+  /** 节点尺寸：宽度按最宽的一行撑开；多行节点更高（首行标题 15px/600，其余 13px/400） */
   function _chainLayout(ctx, chain) {
-    ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
-    var boxes = [], maxW = 0;
-    for (var i = 0; i < chain.labels.length; i++) {
-      var w = Math.max(CHAIN_MIN_W, Math.ceil(ctx.measureText(chain.labels[i]).width) + CHAIN_PAD_X * 2);
-      boxes.push({ text: chain.labels[i], w: w });
-      if (w > maxW) maxW = w;
+    var boxes = [], maxW = 0, h = 0, i, j, n = chain.nodes.length;
+    for (i = 0; i < n; i++) {
+      var lines = chain.nodes[i].lines, mw = 0;
+      for (j = 0; j < lines.length; j++) {
+        ctx.font = (j === 0 ? '600 ' + FONT_SIZE : '400 ' + (FONT_SIZE - 2)) + 'px ' + LABEL_FONT;
+        var w = Math.ceil(ctx.measureText(lines[j]).width);
+        if (w > mw) mw = w;
+      }
+      var bw = Math.max(CHAIN_MIN_W, mw + CHAIN_PAD_X * 2);
+      var bh = CHAIN_BOX_H + (lines.length - 1) * CHAIN_SUB_STEP;
+      boxes.push({ lines: lines, w: bw, h: bh });
+      if (bw > maxW) maxW = bw;
+      h += bh + (i < n - 1 ? CHAIN_GAP : 0);
     }
-    return { boxes: boxes, maxW: maxW, h: boxes.length * CHAIN_BOX_H + (boxes.length - 1) * CHAIN_GAP };
+    return { boxes: boxes, maxW: maxW, h: h };
   }
 
   function _drawChain(ctx, chain, lay, colors, primary, x0, y0) {
     var cx = x0 + lay.maxW / 2;                 // 共同中轴
     var y = y0;
     var gy = { cellW: 12, lineH: CHAIN_GAP };
+    var last = lay.boxes.length - 1;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
     for (var i = 0; i < lay.boxes.length; i++) {
       var b = lay.boxes[i], bx = cx - b.w / 2;
-      var last = i === lay.boxes.length - 1;
-      var rad = Math.min(12, b.w / 4, CHAIN_BOX_H / 2);
-      _roundRect(ctx, bx, y, b.w, CHAIN_BOX_H, rad);
+      var rad = Math.min(12, b.w / 4, b.h / 2);
+      _roundRect(ctx, bx, y, b.w, b.h, rad);
       if (primary) {
-        ctx.fillStyle = _alpha(primary, last ? 0.22 : 0.14);
+        ctx.fillStyle = _alpha(primary, i === last ? 0.22 : 0.14);
         ctx.fill();
-        ctx.strokeStyle = _alpha(primary, last ? 1 : 0.9);
+        ctx.strokeStyle = _alpha(primary, i === last ? 1 : 0.9);
       } else {
         ctx.strokeStyle = colors.text;
       }
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
-      ctx.fillStyle = colors.text;
-      ctx.fillText(b.text, cx, y + CHAIN_BOX_H / 2 + 0.5);
-      y += CHAIN_BOX_H;
-      if (!last) {
+      var topPad = (b.h - (b.lines.length - 1) * CHAIN_SUB_STEP) / 2;
+      for (var j = 0; j < b.lines.length; j++) {
+        if (j === 0) {
+          ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
+          ctx.fillStyle = colors.text;
+        } else {
+          ctx.font = '400 ' + (FONT_SIZE - 2) + 'px ' + LABEL_FONT;
+          ctx.fillStyle = _alpha(colors.text, 0.78);
+        }
+        ctx.fillText(b.lines[j], cx, y + topPad + j * CHAIN_SUB_STEP + 0.5);
+      }
+      y += b.h;
+      if (i < last) {
         var mid = y + CHAIN_GAP / 2;
         var d = _DXY[chain.dir];
         ctx.strokeStyle = colors.text;
@@ -711,6 +726,102 @@ var MopaiCode2Img = (function () {
       }
     }
     ctx.textAlign = 'left';
+  }
+
+  // ---------- 标签列表 / 单行标签（与流程链、线框图同一套设计语言）----------
+  // 「姓名 / 成绩 / 排名」「高并发 / 高频诊断」这类短标签多行文本，等宽卡片看起来就是代码块，
+  // 和同篇文章里的设计图风格打架。这里渲染成圆点列表（比例字体 + 主题色圆点），
+  // 原文空行保留为分组间距；单行标签渲染成圆角标签条。
+  var LIST_LINE_H = 28;
+  var LIST_GAP_H = 12;      // 原文空行 → 分组间距
+  var LIST_DOT = 7;         // 圆点直径
+  var LIST_TEXT_X = 19;     // 文本 x 偏移（圆点 + 间隙）
+  var LIST_MIN_W = 132;
+  var CHIP_H = 34;
+  var CHIP_PAD_X = 15;
+
+  /** info 段不是真代码语言（```text / ```plaintext / ```mono…）时才做设计重绘 */
+  function _isPlainLang(lang) {
+    if (!lang) return true;
+    return /^(text|plaintext|plain|txt|none|mono|raw|diagram|img)$/i.test(lang);
+  }
+
+  /** 代码味道（含这些字符就按代码/技术文本处理，不做列表化） */
+  function _codeSmell(t) {
+    return /[{}()\[\];=<>]|\/\/|::|=>|\||\\/.test(t);
+  }
+
+  /**
+   * 识别「短标签多行」列表。保守：含框线字符、箭头行、代码味道、任何一行超过 24 格、
+   * 条数不在 1~12 → 返回 null（保持等宽卡片）。
+   */
+  function _detectList(code) {
+    var lines = _normalizeLines(code);
+    var items = [], n = 0, i, t;
+    for (i = 0; i < lines.length; i++) {
+      t = lines[i].trim().replace(/^[-*·•]\s+/, '');   // 原文已带列表符号 → 去掉，改用设计圆点
+      if (!t) { items.push({ gap: 1 }); continue; }
+      if (t.length === 1 && '↓↑→←▼▲►◄'.indexOf(t) >= 0) return null;   // 箭头行 → 交给流程链
+      if (/[─━│┃┌┏┐┓└┗┘┛├┣┤┫┬┳┴┻┼╋╭╮╰╯═║]/.test(t)) return null;     // 线框 → 交给几何重绘
+      if (_codeSmell(t)) return null;
+      if (_cellsText(t) > 24) return null;
+      items.push({ text: t });
+      n++;
+    }
+    if (n < 1 || n > 12) return null;
+    return { items: items, count: n, single: n === 1 };
+  }
+
+  function _listLayout(ctx, list) {
+    ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
+    var rows = [], maxW = 0, h = 0, i, it, w;
+    for (i = 0; i < list.items.length; i++) {
+      it = list.items[i];
+      if (it.gap) { rows.push({ gap: true, h: LIST_GAP_H }); h += LIST_GAP_H; continue; }
+      w = Math.ceil(ctx.measureText(it.text).width);
+      if (w > maxW) maxW = w;
+      rows.push({ text: it.text, w: w });
+      h += LIST_LINE_H;
+    }
+    return { rows: rows, maxW: maxW, h: h };
+  }
+
+  function _drawList(ctx, lay, colors, primary, x0, y0) {
+    var y = y0;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (var i = 0; i < lay.rows.length; i++) {
+      var r = lay.rows[i];
+      if (r.gap) { y += r.h; continue; }
+      var cy = y + LIST_LINE_H / 2;
+      ctx.beginPath();
+      ctx.arc(x0 + LIST_DOT / 2, cy, LIST_DOT / 2, 0, Math.PI * 2);
+      ctx.fillStyle = primary || colors.text;
+      ctx.fill();
+      ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
+      ctx.fillStyle = colors.text;
+      ctx.fillText(r.text, x0 + LIST_TEXT_X, cy + 0.5);
+      y += LIST_LINE_H;
+    }
+  }
+
+  /** 单行标签：圆角标签条（宽度贴合文字，视觉上比整块等宽卡片轻得多） */
+  function _drawLabelChip(ctx, chip, colors, primary, x0, y0) {
+    _roundRect(ctx, x0, y0, chip.w, CHIP_H, Math.min(10, CHIP_H / 2));
+    if (primary) {
+      ctx.fillStyle = _alpha(primary, 0.14);
+      ctx.fill();
+      ctx.strokeStyle = _alpha(primary, 0.9);
+    } else {
+      ctx.strokeStyle = colors.text;
+    }
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
+    ctx.fillStyle = colors.text;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(chip.text, x0 + CHIP_PAD_X, y0 + CHIP_H / 2 + 0.5);
   }
 
   /** 几何重绘主入口（内容区已由 renderBlock 准备好画布与偏移） */
@@ -789,15 +900,34 @@ var MopaiCode2Img = (function () {
     _cellW = ctx.measureText('M').width || Math.round(FONT_SIZE * 0.55);
     var layout = _layout(code);
 
-    // 三种内容形态：线框图（几何重绘）/ 竖向流程链（同款设计语言）/ 其余（等宽网格）
+    // 内容形态：线框图（几何重绘）/ 流程链 / 标签列表 / 单行标签 / 其余（等宽网格）
+    // 后三种只对「非代码语言」的围栏生效（```text 等），真代码块永远保持等宽 + 高亮
+    var plain = _isPlainLang(o.lang);
     var asDiagram = !o.forceText && (!!o.forceDiagram || _detectDiagram(code));
-    var chain = (!o.forceText && !asDiagram) ? _detectChain(code) : null;
+    var chain = (!o.forceText && plain && !asDiagram) ? _detectChain(code) : null;
     var chainLay = chain ? _chainLayout(ctx, chain) : null;
+    var listMode = (!o.forceText && plain && !asDiagram && !chainLay) ? _detectList(code) : null;
+    var listLay = null, chip = null;
+    if (listMode) {
+      if (listMode.single) {
+        ctx.font = '600 ' + FONT_SIZE + 'px ' + LABEL_FONT;
+        var tw = Math.ceil(ctx.measureText(listMode.items[0].text).width);
+        chip = { text: listMode.items[0].text, w: Math.max(LIST_MIN_W, tw + CHIP_PAD_X * 2), h: CHIP_H };
+      } else {
+        listLay = _listLayout(ctx, listMode);
+      }
+    }
 
     var contentW, contentH;
     if (chainLay) {
       contentW = PAD_L + chainLay.maxW + PAD_R;
       contentH = chainLay.h;
+    } else if (chip) {
+      contentW = PAD_L + chip.w + PAD_R;
+      contentH = chip.h;
+    } else if (listLay) {
+      contentW = PAD_L + LIST_TEXT_X + listLay.maxW + PAD_R;
+      contentH = listLay.h;
     } else {
       contentW = PAD_L + layout.maxCols * _cellW + PAD_R;
       contentH = layout.rows.length * LINE_H;
@@ -870,6 +1000,10 @@ var MopaiCode2Img = (function () {
     if (chainLay && !asDiagram) {
       // 窄链在卡片里居中，宽链自然占满（PAD_L 起）
       _drawChain(ctx, chain, chainLay, colors, o.primary, Math.max(PAD_L, (W - chainLay.maxW) / 2), y0);
+    } else if (chip && !asDiagram) {
+      _drawLabelChip(ctx, chip, colors, o.primary, PAD_L, y0);
+    } else if (listLay && !asDiagram) {
+      _drawList(ctx, listLay, colors, o.primary, PAD_L, y0);
     } else if (!asDiagram) {
       // 逐字符网格绘制；runs 分段着色；组合字符叠画在前一字符上
       var flatColors = _highlightRuns(code, o.lang, colors);

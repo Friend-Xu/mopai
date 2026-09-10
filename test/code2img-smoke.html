@@ -244,9 +244,13 @@ window.runTests = function () {
 function _pixelChecks() {
   var PRI = '#3a7bd5';
   var opts = { lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false };
+  var mon = function (code) {
+    return MopaiCode2Img.renderBlock(code, { lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false, forceText: true });
+  };
   var en10 = 'Student Cognitive Model';
   var flow = '前一晚睡眠不足\n       \u2193\n注意力下降\n       \u2193\n工作记忆负荷升高\n       \u2193\n简单计算错误';
   var list = '姓名\n成绩\n排名\n错题\n出勤';
+  var codeish = 'S_{t+1}=f(S_t,I_t,E_t)\nE = mc^2';
   var tree = [
     '学生 A', '',
     '知识状态',
@@ -262,9 +266,11 @@ function _pixelChecks() {
   ].join('\n');
   var enUri = MopaiCode2Img.renderBlock(en10, opts);
   var flowUri = MopaiCode2Img.renderBlock(flow, opts);
-  var flowMono = MopaiCode2Img.renderBlock(flow, { lang: 'text', codeThemeId: opts.codeThemeId, primary: PRI, watermark: false, forceText: true });
+  var flowMono = mon(flow);
   var listUri = MopaiCode2Img.renderBlock(list, opts);
-  var listMono = MopaiCode2Img.renderBlock(list, { lang: 'text', codeThemeId: opts.codeThemeId, primary: PRI, watermark: false, forceText: true });
+  var listMono = mon(list);
+  var codeUri = MopaiCode2Img.renderBlock(codeish, opts);
+  var codeMono = mon(codeish);
   var treeUri = MopaiCode2Img.renderBlock(tree, opts);
 
   // 错位样本：内容行比框线多 1 格（尾随 │ 落在框外），对齐样本补 1 个尾随空格 → 两者总格数相同
@@ -299,7 +305,9 @@ function _pixelChecks() {
     var st = _inkStats(im, 20, 30, im.naturalWidth - 60, im.naturalHeight - 20);
     log('ink: cjk flow', st.ink > 300, 'ink=' + st.ink);
     log('cjk flow \u2192 chain', flowUri !== flowMono, '');
-    log('plain list stays text', listUri === listMono, '');
+    log('plain list \u2192 list card', listUri !== listMono, '');
+    log('single label \u2192 chip', enUri !== MopaiCode2Img.renderBlock(en10, { lang: 'text', codeThemeId: 'debug-console', primary: PRI, watermark: false, forceText: true }), '');
+    log('code-ish text stays mono', codeUri === codeMono, '');
     show(flowUri, 220);
     log('misaligned box redraw', !!misUri && misUri === aliUri, 'len=' + (misUri ? misUri.length : 0));
     return _loadImg(misUri);
