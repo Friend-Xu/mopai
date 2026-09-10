@@ -26,6 +26,50 @@ function log(name, ok, extra) {
   el.textContent += (ok ? 'PASS ' : 'FAIL ') + name + '  ' + (extra || '') + '\n';
 }
 
+// ---------- 像素级辅助 ----------
+// 只断言「dataURI 非空」是不够的：文字若被画成卡片底色，图仍然非空却是空白卡片。
+// 这里把区域内出现最多的量化颜色当底色，其余像素算「墨迹」。
+function _loadImg(uri) {
+  return new Promise(function (res, rej) {
+    var im = new Image();
+    im.onload = function () { res(im); };
+    im.onerror = function () { rej(new Error('image load failed')); };
+    im.src = uri;
+  });
+}
+
+function _inkStats(im, x0, y0, x1, y1) {
+  var cv = document.createElement('canvas');
+  cv.width = im.naturalWidth;
+  cv.height = im.naturalHeight;
+  var c = cv.getContext('2d');
+  c.drawImage(im, 0, 0);
+  var d = c.getImageData(x0, y0, x1 - x0, y1 - y0).data;
+  var hist = {}, i, k, n = 0, minx = 1e9, maxx = -1, W = x1 - x0;
+  for (i = 0; i < d.length; i += 4) {
+    k = (d[i] >> 3) + ',' + (d[i + 1] >> 3) + ',' + (d[i + 2] >> 3);
+    hist[k] = (hist[k] || 0) + 1;
+  }
+  var mode = null, mx = 0;
+  for (k in hist) if (hist[k] > mx) { mx = hist[k]; mode = k; }
+  for (i = 0; i < d.length; i += 4) {
+    k = (d[i] >> 3) + ',' + (d[i + 1] >> 3) + ',' + (d[i + 2] >> 3);
+    if (k === mode) continue;
+    n++;
+    var p = i / 4, px = p % W;
+    if (px < minx) minx = px;
+    if (px > maxx) maxx = px;
+  }
+  return { ink: n, w: maxx - minx + 1 };
+}
+
+// 与 code2img 的 LABEL_FONT / FONT_SIZE 保持一致
+function _labelWidth(text) {
+  var c = document.createElement('canvas').getContext('2d');
+  c.font = '600 15px "Microsoft YaHei","PingFang SC","Segoe UI",sans-serif';
+  return c.measureText(text).width;
+}
+
 window.runTests = function () {
   // 用「格数对齐」生成器构造样本（CJK=2 格），保证样本自身无空格误差，
   // 渲染后逐行右边框必须重合（否则算渲染器回归）
@@ -156,12 +200,76 @@ window.runTests = function () {
       im3.style.display = 'block';
       document.body.appendChild(im3);
     }
+    // ---- 10~13：像素级回归（空白卡片 / 误判 / 错位线框 / 弱箭头吞字母）----
+    return _pixelChecks();
+  }).then(function () {
     window.__done = true;
   }).catch(function (e) {
     log('mermaid/math render', false, e.message);
     window.__done = true;
   });
 };
+
+/**
+ * 像素级回归：跑完前面 9 项后执行
+ * 10 纯英文单行文本卡必须有字（历史 bug：fillStyle 未初始化 → 文字画成卡片底色）
+ * 11 中文 + ↓ 流程卡必须有字，且不得被误判成线框图
+ * 12 作者按「字数」补空格的错位线框 == 对齐版本（框识别容差 + 框边竖刺抑制）
+ * 13 框内标签里的 v 不得被当成箭头吞掉（标签墨迹宽度 ≈ 文本宽度）
+ */
+function _pixelChecks() {
+  var opts = { lang: 'text', codeThemeId: 'debug-console', primary: '#3a7bd5', watermark: false };
+  var en10 = 'Student Cognitive Model';
+  var flow = '前一晚睡眠不足\n       \u2193\n注意力下降\n       \u2193\n工作记忆负荷升高\n       \u2193\n简单计算错误';
+  var enUri = MopaiCode2Img.renderBlock(en10, opts);
+  var flowUri = MopaiCode2Img.renderBlock(flow, opts);
+  var flowMono = MopaiCode2Img.renderBlock(flow, { lang: 'text', codeThemeId: opts.codeThemeId, primary: opts.primary, watermark: false, forceText: true });
+
+  // 错位样本：内容行比框线多 1 格（尾随 │ 落在框外），对齐样本补 1 个尾随空格 → 两者总格数相同
+  var top = '\u250c' + '\u2500'.repeat(21) + '\u2510';
+  var bot = '\u2514' + '\u2500'.repeat(21) + '\u2518';
+  var label = '\u4eba\u751f/\u6559\u80b2\u76ee\u6807\u5c42';
+  var mis = [top, '\u2502   ' + label + '    \u2502', bot].join('\n');
+  var ali = [top, '\u2502   ' + label + '   \u2502 ', bot].join('\n');
+  var misUri = MopaiCode2Img.renderBlock(mis, opts);
+  var aliUri = MopaiCode2Img.renderBlock(ali, opts);
+
+  // 弱箭头误判样本：标签里含 v（上方正好压着框线）
+  var txt = 'Intervention Engine';
+  var boxUri = MopaiCode2Img.renderBlock([top, '\u2502 ' + txt + ' \u2502', bot].join('\n'), opts);
+
+  var shown = 0;
+  function show(uri, w) {
+    if (!uri || shown > 2) return;
+    shown++;
+    var im = document.createElement('img');
+    im.src = uri;
+    im.style.width = (w || 420) + 'px';
+    im.style.display = 'block';
+    document.body.appendChild(im);
+  }
+
+  return _loadImg(enUri).then(function (im) {
+    var st = _inkStats(im, 20, 30, im.naturalWidth - 60, im.naturalHeight - 20);
+    log('ink: en one-liner', st.ink > 150, 'ink=' + st.ink);
+    return _loadImg(flowUri);
+  }).then(function (im) {
+    var st = _inkStats(im, 20, 30, im.naturalWidth - 60, im.naturalHeight - 20);
+    log('ink: cjk flow', st.ink > 300, 'ink=' + st.ink);
+    log('cjk flow stays text', flowUri === flowMono, '');
+    show(flowUri, 240);
+    log('misaligned box redraw', !!misUri && misUri === aliUri, 'len=' + (misUri ? misUri.length : 0));
+    return _loadImg(boxUri);
+  }).then(function (im) {
+    // 标签行中心 y = (PAD_T + 1*LINE_H + LINE_H/2) * SCALE = (16 + 22 + 11) * 2 = 98
+    // 采样带左右各留出 PAD+6，避开卡片主题色条与框线本身（否则边界会被算进墨迹）
+    var band = _inkStats(im, 46, 84, im.naturalWidth - 46, 112);
+    var expect = 2 * _labelWidth(txt);
+    log('label keeps letters (v)', band.w > expect * 0.88 && band.w < expect * 1.12,
+      'bbox=' + band.w + ' expect=' + Math.round(expect));
+    show(boxUri, 320);
+  });
+}
 </script>
 </body>
 </html>

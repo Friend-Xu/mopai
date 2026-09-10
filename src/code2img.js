@@ -73,9 +73,12 @@ var MopaiCode2Img = (function () {
     if (!lang || !window.hljs || !window.hljs.getLanguage(lang)) {
       return null;
     }
+    // 与 _layout 用同一份归一化文本（tab 已展开、末尾空行已去）
+    // → 颜色序列与「逐字符绘制项」严格一一对应（否则尾随换行会让整块高亮失效）
+    var norm = _normalizeLines(code).join('\n');
     var html;
     try {
-      html = window.hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+      html = window.hljs.highlight(norm, { language: lang, ignoreIllegals: true }).value;
     } catch (e) {
       return null;
     }
@@ -137,10 +140,17 @@ var MopaiCode2Img = (function () {
     return cells;
   }
 
-  function _layout(code) {
-    var lines = code.replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\t/g, '  ').split('\n');
+  /** 归一化：CRLF → LF、tab → 2 空格、去掉末尾空行（_layout 与 _highlightRuns 共用） */
+  function _normalizeLines(code) {
+    var lines = String(code == null ? '' : code)
+      .replace(/\r\n/g, '\n').replace(/\r/g, '\n').replace(/\t/g, '  ').split('\n');
     // 去掉末尾空行（ASCII 图常以换行收尾）
     while (lines.length > 1 && lines[lines.length - 1].trim() === '') lines.pop();
+    return lines;
+  }
+
+  function _layout(code) {
+    var lines = _normalizeLines(code);
     var rows = [];
     var maxCols = 0;
     for (var i = 0; i < lines.length; i++) {
@@ -323,14 +333,15 @@ var MopaiCode2Img = (function () {
     var a = ch ? _ARROWS[ch] : null;
     if (!a) return null;
     if (a.weak) {
-      // 弱箭头必须是「指向本格」的线尾（前一格有线延伸过来）
-      var back = _OPP[a.dir];
-      var d = _DXY[back];
-      if (!_probe(gr, r + d[1], c + d[0]).h && !_probe(gr, r + d[1], c + d[0]).v) {
-        // 也允许正前方的线（> 在 - 之后）
-        var f = _DXY[a.dir];
-        if (!_probe(gr, r + f[1], c + f[0]).h && !_probe(gr, r + f[1], c + f[0]).v) return null;
-      }
+      // 弱箭头（v ^ > <）本身就是普通字母/符号，必须确认它「嵌在线上」才认：
+      // 只认同轴的邻格连通（纵箭头看 v、横箭头看 h）。
+      // 早先写成「h 或 v 任一」会让框内文字中招——"Intervention" 的 v 上方正好压着
+      // 框线 ─（h=1）→ 被当成箭头画成 ▼ 并把字母吞掉。
+      var axis = (a.dir === 'u' || a.dir === 'd') ? 'v' : 'h';
+      var back = _DXY[_OPP[a.dir]];
+      var fwd = _DXY[a.dir];
+      var near = _probe(gr, r + back[1], c + back[0])[axis] || _probe(gr, r + fwd[1], c + fwd[0])[axis];
+      if (!near) return null;
     }
     if (expectDir && a.dir !== expectDir) return null;
     return a;
@@ -381,6 +392,20 @@ var MopaiCode2Img = (function () {
       }
       return false;
     }
+    // 容差版竖边框：CJK 线框图常按「字数」补空格（汉字当 1 格），内容行的 │ 会整体偏 1~2 格。
+    // 严格连续会整个框都认不出来——表现是同一张图里只有对齐的那几个框被重绘、其余仍是方角线框。
+    // 这里允许每行在 ±2 格内存在竖直连通格（_probe 认，箭头格也算竖直连通；横线格不算）。
+    function vSpanTol(c, r1, r2) {
+      if (vSpan(c, r1, r2)) return true;
+      for (var rr = r1; rr <= r2; rr++) {
+        var ok = false;
+        for (var d = -2; d <= 2; d++) {
+          if (_probe(gr, rr, c + d).v) { ok = true; break; }
+        }
+        if (!ok) return false;
+      }
+      return true;
+    }
     var rects = [];
     for (var key in hRuns) {
       if (!hRuns.hasOwnProperty(key)) continue;
@@ -391,7 +416,7 @@ var MopaiCode2Img = (function () {
         for (var j = i + 1; j < rows.length; j++) {
           var rr1 = rows[i], rr2 = rows[j];
           if (rr2 - rr1 < 2) continue;
-          if (!vSpan(cc1, rr1, rr2) || !vSpan(cc2, rr1, rr2)) continue;
+          if (!vSpanTol(cc1, rr1, rr2) || !vSpanTol(cc2, rr1, rr2)) continue;
           // 已被更大矩形包含则跳过
           var dup = false;
           for (var q = 0; q < rects.length; q++) {
@@ -406,7 +431,7 @@ var MopaiCode2Img = (function () {
   }
 
   /** 绘制一个线段网格（逐格画臂 + 转角圆弧），跳过矩形占用格 */
-  function _drawLineCells(ctx, gr, consumed, geo, color, lw) {
+  function _drawLineCells(ctx, gr, consumed, geo, color, lw, rects) {
     var r = Math.min(7, geo.cellW * 0.85, geo.lineH * 0.34);
     ctx.strokeStyle = color;
     ctx.lineWidth = lw;
@@ -417,6 +442,7 @@ var MopaiCode2Img = (function () {
         if (consumed[row + ',' + col]) continue;
         var conn = _connAt(gr, row, col);
         if (!conn) continue;
+        if (_isBorderNoise(gr, rects, row, col, conn)) continue;
         var ch = gr.at(row, col);
         var ds = _dirsOf(conn);
         if (ds.length === 0) continue;
@@ -474,6 +500,29 @@ var MopaiCode2Img = (function () {
   function _armExt(gr, row, col, dir) {
     var d = _DXY[dir];
     return _isArrowAt(gr, row + d[1], col + d[0], dir) ? 1.9 : 1;
+  }
+
+  /**
+   * 框线旁的对齐噪声：CJK 线框图常见「按字数补空格」（把汉字当 1 格），
+   * 于是内容行的 │ 会比框的左右边多出 1~3 格，重绘后表现为框边旁边的小竖刺。
+   * 判定条件收紧：纯竖笔画 + 落在框的行范围内 + 竖直笔画的完整跨度不超出该框
+   * （真连接线会伸出框外，不会被误删）。
+   */
+  function _isBorderNoise(gr, rects, r, c, conn) {
+    if (!rects || !rects.length) return false;
+    if (conn.l || conn.r || (!conn.u && !conn.d)) return false;
+    for (var i = 0; i < rects.length; i++) {
+      var R = rects[i];
+      if (r < R.r1 || r > R.r2) continue;
+      var near = (c > R.c2 && c <= R.c2 + 3) || (c < R.c1 && c >= R.c1 - 3);
+      if (!near) continue;
+      var up = r;
+      while (up - 1 >= 0 && _probe(gr, up - 1, c).v) up--;
+      var dn = r;
+      while (dn + 1 < gr.H && _probe(gr, dn + 1, c).v) dn++;
+      if (up >= R.r1 && dn <= R.r2) return true;
+    }
+    return false;
   }
 
   function _arm(ctx, cx, cy, dir, geo, ext) {
@@ -593,7 +642,7 @@ var MopaiCode2Img = (function () {
       ctx.stroke();
     }
     // ② 连线（跳过节点框占用的格）
-    _drawLineCells(ctx, gr, consumed, geo, lineColor, 2);
+    _drawLineCells(ctx, gr, consumed, geo, lineColor, 2, rects);
     // ③ 箭头
     for (var row = 0; row < gr.H; row++) {
       for (var col = 0; col < gr.W; col++) {
@@ -709,14 +758,17 @@ var MopaiCode2Img = (function () {
     if (!asDiagram) {
       // 逐字符网格绘制；runs 分段着色；组合字符叠画在前一字符上
       var flatColors = _highlightRuns(code, o.lang, colors);
-      var totalCells = 0;
-      for (var r0 = 0; r0 < layout.rows.length; r0++) totalCells += layout.rows[r0].length;
-      if (flatColors && flatColors.length !== totalCells) flatColors = null; // 对齐保护
+      var totalChars = 0;
+      for (var r0 = 0; r0 < layout.rows.length; r0++) totalChars += layout.rows[r0].length;
+      if (flatColors && flatColors.length !== totalChars) flatColors = null; // 对齐保护（逐字符比对，CJK 也不例外）
 
       ctx.font = FONT_SIZE + 'px ' + FONT_STACK;
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'left';
-      var curColor = null;
+      ctx.fillStyle = colors.text;
+      // 哨兵初值：必须让首个字符也写一次 fillStyle。若初值为 null 而首字符颜色也是 null，
+      // 这里的 fillStyle 会残留卡片底色 → 整个代码块画成"空白卡片"（CJK/无高亮文本必然命中）
+      var curColor = '\u0000';
       var g = 0;
       for (var r = 0; r < layout.rows.length; r++) {
         var row = layout.rows[r];
