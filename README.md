@@ -4,7 +4,8 @@
 
 墨排是一款专为微信公众号文章排版设计的桌面工具：本地写 Markdown，右侧实时预览公众号排版效果，一键复制到公众号编辑器，样式全部内联，粘贴即用。
 
-零外部依赖：整个应用只有 Python 标准库 + 嵌入式 Python 运行时，**删掉文件夹即完全卸载**。
+Python 侧零外部依赖：解释器与全部依赖都在项目 `runtime\` 内，**删掉文件夹即完全卸载**；
+CLR 宿主与 WebView2 由 Windows 提供（需 .NET 桌面运行时 8.0+，见「快速开始」）。
 
 ---
 
@@ -22,27 +23,41 @@
 - **文件栏多文章管理**：打开文件夹后左右切换文章，自动保存会话
 - **Ctrl+S 保存回文件**，切换文章前未保存提醒
 - **图片粘贴/拖入**：截图、拖拽、文件选择器插入，复制时统一处理（同图去重）
+- **粘贴远程图片自动本地化**：从网页 / ChatGPT 等聊天界面复制的内容里若含图片 URL（Markdown 图片、图片链接或 HTML `<img>`），粘贴时由 Python 侧下载并转成本地图 —— 预览直接显示，复制时照常上传图床
+- **设置与会话持久化**：主题、代码配色、图床令牌、上次编辑内容保存在项目内 `userdata\`，重启自动恢复
 
 ---
 
 ## 快速开始
+
+**环境要求**（Windows 10/11 x64）：
+
+| 组件 | 要求 | 说明 |
+|---|---|---|
+| .NET 桌面运行时 | **8.0+**（`Microsoft.WindowsDesktop.App`） | pythonnet 的 CLR 宿主与 pywebview 的 WinForms 后端依赖它；和 WebView2 一样属于系统组件，项目不自带 |
+| WebView2 运行时 | 任意较新版本 | Edge 自带，一般无需单独安装 |
+| Node.js | 仅重建 `runtime\` 时需要 | 下载器；也可以改用上游 `setup-runtime.cmd`（需系统 Python 3） |
 
 ```bash
 git clone https://github.com/<your-username>/mopai.git
 cd mopai
 ```
 
-新机器上运行 `setup-runtime.cmd` 一键构建嵌入式 Python 运行时（下载 Python 3.12 嵌入式包 + 安装 pywebview）：
+新机器上构建嵌入式 Python 运行时，**推荐**（不依赖系统 Python、幂等、自动打 pywebview 的 CoreCLR 兼容补丁）：
 
 ```
-setup-runtime.cmd
+node setup-runtime.mjs
 ```
 
-然后双击 `mopai.cmd` 启动（无控制台窗口）。或者命令行运行：
+上游的 `setup-runtime.cmd` 同样可用，但它依赖系统 Python 3，且不会应用这两处补丁。
+
+然后双击 `mopai.cmd` 启动（无控制台窗口）。或在命令行运行（可看到报错）：
 
 ```
 runtime\python.exe app.py
 ```
+
+> 本机踩过的坑、重建与排错步骤见 [本地部署说明.md](本地部署说明.md)。
 
 ---
 
@@ -54,9 +69,11 @@ runtime\python.exe app.py
 4. 点击 **📋 复制到公众号**，粘贴到微信编辑器（mp.weixin.qq.com）
 5. `Ctrl+S` 保存修改回文件；下次启动自动恢复上次会话
 
+> 从网页 / ChatGPT 聊天界面复制的内容可以直接粘进编辑器：正文里的远程图片会被自动抓成本地图并显示（前提是复制内容里带图片 URL；纯文本复制拿不到图片）。
+
 ### 图片怎么进公众号？
 
-微信编辑器粘贴 HTML 时，遇到 `<img src="http://...">` 会**自动下载图片并上传到微信自己的 CDN**（`mmbiz.qpic.cn`），生成永久链接。这意味着外部图床只需要撑过「复制 → 粘贴」那几秒——墨排正是利用这一点，提供两种图床模式：
+微信编辑器粘贴 HTML 时，遇到 `<img src="http://...">` 会**自动下载图片并上传到微信自己的 CDN**（`mmbiz.qpic.cn`），生成永久链接。这意味着外部图床只需要撑过「复制 → 粘贴」那几秒——墨排正是利用这一点，提供四种图床模式（本地 HTTP / 腾讯云 COS / GitHub / s.ee，见下）：
 
 ---
 
@@ -66,7 +83,7 @@ runtime\python.exe app.py
 
 微信编辑器粘贴 HTML 时，由**你的浏览器**下载图片再上传微信 CDN —— 本地服务可被本机浏览器访问，所以「本地 HTTP」模式可行。
 
-CSDN 等平台转存图片是**服务器端**抓取 —— 服务器访问不到你电脑上的 `127.0.0.1`。所以发 CSDN 必须用**公网 URL**：GitHub 图床（免费）或 s.ee（付费）。
+CSDN 等平台转存图片是**服务器端**抓取 —— 服务器访问不到你电脑上的 `127.0.0.1`。所以发 CSDN 必须用**公网 URL**：推荐腾讯云 COS（国内机房直链），或 GitHub 图床（免费，但国内访问 raw 受限）、s.ee（付费）。
 
 ### 模式一：本地 HTTP 服务（默认，零成本，仅微信）
 
@@ -152,29 +169,34 @@ CSDN 等平台转存图片是**服务器端**抓取 —— 服务器访问不到
 ## 架构
 
 ```
-mopai.cmd            ← 双击启动（runtime\pythonw.exe app.py，无控制台窗口）
-setup-runtime.cmd    ← 新机器一键重建 runtime/（下载嵌入式 Python + pip 依赖）
-app.py               ← 入口：pywebview 窗口 + Python API 桥
-runtime/             ← 嵌入式 Python 3.12 + pywebview（git 忽略，setup 脚本重建）
-index.html           ← 前端单页（CSS 内联 <style>，JS 按序 <script> 加载）
-src/                 ← 11 个 IIFE 模块（ES5 风格，无构建步骤）
-test/cdp_eval.py     ← CDP 调试工具
+mopai.cmd                ← 双击启动（runtime\pythonw.exe app.py，无控制台窗口）
+setup-runtime.mjs        ← 重建 runtime/（Node 版，推荐；含 pywebview 的 CoreCLR 兼容补丁）
+setup-runtime.cmd        ← 上游脚本（需要系统 Python 3）
+app.py                   ← 入口：pywebview 窗口 + Python API 桥
+requirements.txt         ← Python 依赖版本锁
+mopai.runtimeconfig.json ← CoreCLR 运行时配置（Microsoft.WindowsDesktop.App 8.0+，rollForward=Major）
+runtime/                 ← 嵌入式 Python 3.12 + pywebview（git 忽略，setup 脚本重建）
+index.html               ← 前端单页（CSS 内联 <style>，JS 按序 <script> 加载）
+src/                     ← 14 个 IIFE 模块（ES5 风格，无构建步骤）
+test/cdp_eval.py         ← CDP 调试工具
+本地部署说明.md           ← 本机部署差异、排错与验证记录
 ```
 
 **数据流**：
 
 ```
 打开文件夹 → app.py 扫描 → {MD内容, 图片映射} → 前端资产注册
+粘贴富文本 → 远程图片 URL 由 Python 下载（fetch_image）→ 本地资产 → 替换为本地引用
 编辑器输入 → engine.render() 管线：
   1. markdown-it → HTML
   2. 主题引擎：内联样式 + 标题装饰（h2/h3 招牌）+ 图注
   3. 相对路径图片 → dataURI（仅预览）
   4. 代码高亮内联化（hljs token → 色值映射）
   5. 表格自适应（卡片/DL/滑动）
-复制到公众号 → 本地 HTTP 服务（默认）或 s.ee 图床（备选）→ CF_HTML 写剪贴板
+复制到公众号 → 本地 HTTP 服务（默认）/ 腾讯云 COS / GitHub / s.ee → CF_HTML 写剪贴板
 ```
 
-**技术栈**：Python 3.12（标准库）、pywebview（WebView2）、markdown-it、highlight.js。零 npm 依赖、零构建步骤。
+**技术栈**：Python 3.12（标准库）、pywebview（WebView2）、pythonnet + clr-loader（CLR 宿主，需 .NET 桌面运行时 8.0+）、markdown-it、highlight.js。零 npm 依赖、零构建步骤。
 
 ---
 
@@ -189,6 +211,18 @@ runtime\python.exe app.py
 # 在应用窗口里执行任意 JS（另开终端）
 runtime\python.exe test\cdp_eval.py "document.title"
 ```
+
+> 端口被占用时换一个（例如 9333），并同步修改 `test\cdp_eval.py` 里的 `CDP_PORT`。
+> 应用启动时会清一次 WebView2 缓存，所以改完 `src\*.js` 重启即生效（不会加载旧代码）。
+
+---
+
+## 故障排查
+
+- **双击 `mopai.cmd` 没反应**：`pythonw.exe` 没有控制台也没有 stderr，异常会写 `userdata\crash.log` 并弹窗；也可以改用 `runtime\python.exe app.py` 在控制台复现。
+- **报 `Failed to create a .NET runtime (coreclr)` / `FrameworkMissingFailure`**：安装 .NET 桌面运行时 8.0 或更高版本（https://dotnet.microsoft.com/download/dotnet）。
+- **报 `Could not load type 'System.Windows.Forms.ContextMenu'`**：pywebview 的 WebView2 程序集被换回 .NET Framework 版（例如重装了 pywebview），重跑 `node setup-runtime.mjs`。
+- **改了前端没生效**：重启应用（启动会清 WebView2 缓存）；仍不行就看 `runtime\python.exe app.py` 的控制台报错。
 
 ---
 
