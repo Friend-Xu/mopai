@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Logo/mopai-logo.png" alt="墨排 Mopai" width="420">
+</p>
+
 # 墨排 Mopai
 
 **Markdown → 微信公众号排版桌面应用**
