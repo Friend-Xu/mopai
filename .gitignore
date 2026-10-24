@@ -23,11 +23,25 @@ node_modules/
 package.json
 package-lock.json
 
-# 调试与测试产物
+# 调试产物
 app-debug.log
-test/sample-article/
 __pycache__/
 *.pyc
+
+# 测试数据（不提交；开发工具 test/cdp_eval.py、test/code2img-smoke.html 仍跟踪）
+# 端到端验证用的样例文章（含图片）
+test/sample-article/
+# 测试输入文档（如 GPT 导出的测试文本）
+test/*.docx
+test/*.pdf
+# 测试截图 / 渲染输出图
+test/*.png
+test/*.jpg
+test/*.jpeg
+test/*.gif
+test/*.webp
+# 测试用压缩包
+test/*.zip
 
 # 个人工具（Claude Code 会话与本机启动器）
 .claude/
