@@ -26,12 +26,41 @@ import re
 import shutil
 import socket
 import struct
+import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.parse
 import urllib.request
 import zlib
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# pythonnet 3.x 的 Python.Runtime.dll 在本机只能由 .NET (CoreCLR) 加载：走默认的
+# .NET Framework 后端会在启动窗口时报
+# "Failed to resolve Python.Runtime.Loader.Initialize"。
+# 而 CoreCLR 默认只引 Microsoft.NETCore.App，里面没有 System.Windows.Forms
+# （pywebview 的 winforms 后端第一件事就是 clr.AddReference('System.Windows.Forms')），
+# 所以必须用一个引用 Microsoft.WindowsDesktop.App 的 runtimeconfig.json，
+# 并通过 PYTHONNET_CORECLR_RUNTIME_CONFIG 指给 pythonnet（见 pythonnet 文档
+# set_runtime_from_env）。两者都必须在 pywebview 的 winforms 后端 import clr
+# 之前生效，所以在 import webview 之前设定。
+# 用 setdefault：外部显式给出同名变量时以外部为准。
+#
+# 本机能跑哪个 .NET 只由 mopai.runtimeconfig.json 里的 rollForward 决定：该文件
+# 声明最低要求 8.0.0 + "rollForward": "Major"，所以装了 8.x 就用 8.x，升到 9/10
+# 也能起来。缺了这条、只钉 8.0.0 时，本机 .NET 一升级就会启动失败
+# （ClrError 0x80008096 FrameworkMissingFailure）。
+os.environ.setdefault('PYTHONNET_RUNTIME', 'coreclr')
+os.environ.setdefault(
+    'PYTHONNET_CORECLR_RUNTIME_CONFIG',
+    os.path.join(APP_DIR, 'mopai.runtimeconfig.json'))
+
+# 说明：CoreCLR 下 pywebview 还缺两处 .NET Framework 才有的假设
+# （Microsoft.Win32.SystemEvents 的显式引用、OpenFolderDialog 依赖的
+# FileDialogNative 类型），这两处由 setup-runtime.mjs 在安装时直接打进
+# runtime\Lib\site-packages\webview\platforms\winforms.py，见该文件内的「本地补丁」标记。
 
 import webview
 
@@ -280,6 +309,67 @@ class Api:
                 'dataUri': 'data:%s;base64,%s' % (mime, b64)
             })
         return out
+
+    # ---------- 远程图片抓取（粘贴 → 本地图片） ----------
+
+    _IMAGE_SIGS = (
+        (b'\xff\xd8\xff', 'jpg', 'image/jpeg'),
+        (b'\x89PNG\r\n\x1a\n', 'png', 'image/png'),
+        (b'GIF87a', 'gif', 'image/gif'),
+        (b'GIF89a', 'gif', 'image/gif'),
+        (b'BM', 'bmp', 'image/bmp'),
+    )
+
+    def fetch_image(self, url):
+        """把粘贴内容里的远程图片抓到本地，返回 {ok, ext, dataUri}。
+
+        为什么放在 Python 侧抓：浏览器 fetch 远程图片会被 CORS 拦，Python 的
+        urllib 没有这个限制。抓下来只注册到 MopaiAssets（dataURI），预览直接能
+        显示，复制到公众号时再走现有图床/本地 HTTP 流程，不会提前上传。
+        """
+        if not re.match(r'^https?://', url or '', re.I):
+            return {'ok': False, 'error': '只支持 http(s) 图片地址'}
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                          'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+            'Accept': 'image/*,*/*;q=0.8',
+        })
+        # 外网图片服务器偶发 TLS 握手超时：单次 15s、最多 2 次，避免一次粘贴卡太久
+        data = None
+        ctype = ''
+        last_err = None
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    ctype = (resp.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+                    if ctype and not ctype.startswith('image/'):
+                        # 不是图片（普通网页链接）：不读正文，直接告诉前端跳过
+                        return {'ok': False, 'error': '不是图片（%s）' % ctype, 'notImage': True}
+                    data = resp.read(MAX_IMAGE_BYTES + 1)
+                break
+            except Exception as e:
+                last_err = e
+                if attempt == 0:
+                    time.sleep(1.0)
+        if data is None:
+            return {'ok': False, 'error': str(last_err)}
+        if len(data) > MAX_IMAGE_BYTES:
+            return {'ok': False, 'error': '图片超过 %d MB' % (MAX_IMAGE_BYTES // 1048576)}
+
+        ext = mime = None
+        for sig, sig_ext, sig_mime in self._IMAGE_SIGS:
+            if data.startswith(sig):
+                ext, mime = sig_ext, sig_mime
+                break
+        if not ext and data.startswith(b'RIFF') and data[8:12] == b'WEBP':
+            ext, mime = 'webp', 'image/webp'
+        if not ext:
+            return {'ok': False, 'error': '不是可识别的图片格式'}
+
+        return {
+            'ok': True, 'ext': ext, 'mime': mime, 'bytes': len(data),
+            'dataUri': 'data:%s;base64,%s' % (mime, base64.b64encode(data).decode('ascii')),
+        }
 
     # ---------- 图床上传 ----------
 
@@ -706,7 +796,21 @@ def _set_clipboard_image(data_uri):
 
 # ---------- 启动 ----------
 
+def _clear_webview_cache():
+    """清掉 WebView2 的磁盘缓存。
+
+    前端是「无构建、直接加载 src\\*.js」的：改完 JS 只要重启就应该生效。但 pywebview
+    的静态服务用的是 bottle 0.13 的 static_file —— 它自带 ETag/Last-Modified，会覆盖
+    pywebview 想设的 no-cache 头，于是 WebView2 按启发式缓存 JS/CSS，重启后加载的
+    仍是上一次的旧代码（改了看不到效果，排查起来毫无线索）。
+    每次启动清一次缓存，保证界面代码总是从项目文件重新读取。
+    """
+    for rel in ('Default\\Cache', 'Default\\Code Cache', 'GPUCache'):
+        shutil.rmtree(os.path.join(APP_DIR, 'userdata', 'EBWebView', rel), ignore_errors=True)
+
+
 def main():
+    _clear_webview_cache()
     api = Api()
     window = webview.create_window(
         '墨排 Mopai',
@@ -717,8 +821,52 @@ def main():
         min_size=(960, 640)
     )
     api._window = window
-    webview.start(debug=False)
+    # private_mode 默认为 True：pywebview 会把 WebView2 用户目录建在临时目录里，
+    # localStorage 不落盘 —— 主题/令牌/上次会话每次启动都会丢（README 承诺的
+    # 「下次启动自动恢复上次会话」因此失效）。这里显式关闭隐私模式，并把用户目录
+    # 固定在项目内 userdata\，既不丢设置也不往 %LOCALAPPDATA% 里写东西。
+    webview.start(
+        debug=False,
+        private_mode=False,
+        storage_path=os.path.join(APP_DIR, 'userdata')
+    )
+
+
+def _report_startup_failure():
+    """启动期异常落盘 + 弹窗。
+
+    mopai.cmd 用 pythonw.exe 启动（没有控制台，也没有 stderr），异常若只往上抛，
+    用户看到的就只是「窗口没出来」——连报错文本都拿不到。所以这里先写
+    userdata\\crash.log，再把异常链和日志路径弹给用户。日志写失败不掩盖原始异常：
+    调用方仍会 re-raise。
+    """
+    detail = traceback.format_exc()
+    log_path = os.path.join(APP_DIR, 'userdata', 'crash.log')
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, 'w', encoding='utf-8') as fh:
+            fh.write(time.strftime('%Y-%m-%d %H:%M:%S\n') + detail)
+    except OSError:
+        log_path = '(日志写入失败)'
+
+    # 由外到内收集异常链：最内层的 cause 往往才是真正原因（如 ClrError）。
+    chain = []
+    exc = sys.exc_info()[1]
+    while exc is not None:
+        chain.append(('%s: %s' % (type(exc).__name__, exc)).strip())
+        exc = exc.__cause__ or exc.__context__
+    summary = '\n'.join(reversed(chain[-4:]))
+
+    ctypes.windll.user32.MessageBoxW(
+        None,
+        '墨排启动失败\n\n%s\n\n完整堆栈：%s' % (summary, log_path),
+        '墨排 Mopai',
+        0x10 | 0x1000 | 0x40000)  # MB_ICONERROR | MB_SYSTEMMODAL | MB_TOPMOST
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception:
+        _report_startup_failure()
+        raise

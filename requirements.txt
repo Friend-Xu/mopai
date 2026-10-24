@@ -1,0 +1,31 @@
+# 墨排 Mopai — runtime\ 的 pip 依赖锁
+# 由 setup-runtime.mjs 安装到 runtime\Lib\site-packages（仅项目内）
+#
+# 直接依赖：
+#   pywebview        桌面窗口 + WebView2 后端 + JS↔Python 桥
+#   pythonnet        pywebview 的 EdgeChromium 后端依赖的 CLR 互操作层
+#   websocket-client test\cdp_eval.py 通过 CDP 在应用窗口里执行 JS 时需要
+#   setuptools       pywebview 的依赖 proxy_tools 只发布 sdist，需要它现场构建
+#   wheel            同上，构建轮子的后备
+# 其余为上述包的传递依赖，一并锁定以保证可复现。
+#
+# ⚠️ pythonnet 固定 3.1.0：它的 wheel 是平台相关包（win32.win_amd64）。
+#    运行时选择由 app.py 顶部的 PYTHONNET_RUNTIME=coreclr 指定——本机 pythonnet
+#    的 Python.Runtime.dll 只能由 .NET (CoreCLR) 加载，走默认的 .NET Framework
+#    后端会报 Failed to resolve Python.Runtime.Loader.Initialize。
+#
+# 本文件由 `runtime\python.exe -m pip freeze` 生成（生成于 Python 3.12.9）。
+
+# --- 直接依赖 ---
+pywebview==6.2.1
+pythonnet==3.1.0
+websocket-client==1.9.2
+setuptools==84.0.0
+wheel==0.48.0
+# --- 传递依赖 ---
+bottle==0.13.4
+cffi==2.1.1
+clr_loader==0.3.1
+proxy_tools==0.1.0
+pycparser==3.0
+typing_extensions==4.16.0
